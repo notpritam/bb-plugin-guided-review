@@ -254,7 +254,7 @@ export function parseTarget(input: string, base?: string): ReviewTarget {
 
 export function targetKey(t: ReviewTarget): string {
   if (t.kind === "pr") return `pr-${t.number}`;
-  const hash = createHash("sha1").update(`${t.gitRef} ${t.base ?? ""}`).digest("hex").slice(0, 12);
+  const hash = createHash("sha1").update(`${t.gitRef}${t.base ?? ""}`).digest("hex").slice(0, 12);
   return `ref-${hash}`;
 }
 ```
