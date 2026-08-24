@@ -342,17 +342,27 @@ Expected: FAIL.
 ```ts
 export interface PatchFile { path: string; text: string }
 
-// Add "diff --git a/<p> b/<p>" before each "--- a/<p>" block that lacks one.
+// Ensure each file block has a "diff --git a/<p> b/<p>" header. Real git/gh
+// diffs already have one (with an `index ...` line before `--- a/...`); only
+// header-less inputs need synthesis. Track header-presence per file block, not
+// by the single previous output line (a naive prev-line check duplicates the
+// header on any diff that has an `index`/`mode` line before `--- a/...`).
 export function ensureGitHeaders(patch: string): string {
   const lines = patch.split("\n");
   const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const minus = line.match(/^--- a\/(.+)$/);
-    const prev = out[out.length - 1] ?? "";
-    if (minus && !prev.startsWith("diff --git ")) {
-      const p = minus[1];
-      out.push(`diff --git a/${p} b/${p}`);
+  let hasHeader = false;
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      hasHeader = true;
+      out.push(line);
+      continue;
+    }
+    const minus = line.match(/^--- a\/(.+?)\r?$/); // old-file marker, CRLF-tolerant
+    if (minus) {
+      if (!hasHeader) out.push(`diff --git a/${minus[1]} b/${minus[1]}`);
+      out.push(line);
+      hasHeader = false; // next file block starts fresh
+      continue;
     }
     out.push(line);
   }
@@ -696,7 +706,7 @@ function run(bin: string, args: string[], opts: RunOpts = {}): Promise<RunResult
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
     child.on("error", reject);
-    child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 0 }));
+    child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 1 }));
     if (opts.stdin !== undefined) child.stdin.end(opts.stdin);
     else child.stdin.end();
   });
