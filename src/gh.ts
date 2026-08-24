@@ -38,7 +38,7 @@ function run(bin: string, args: string[], opts: RunOpts = {}): Promise<RunResult
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
     child.on("error", reject);
-    child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 0 }));
+    child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 1 }));
     if (opts.stdin !== undefined) child.stdin.end(opts.stdin);
     else child.stdin.end();
   });

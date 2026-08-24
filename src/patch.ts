@@ -1,16 +1,25 @@
 export interface PatchFile { path: string; text: string }
 
-// Add "diff --git a/<p> b/<p>" before each "--- a/<p>" block that lacks one.
+// Ensure each file block has a "diff --git a/<p> b/<p>" header. Real git/gh
+// diffs already have one (with an `index ...` line before `--- a/...`); only
+// header-less inputs need synthesis. Track presence per file block, not by the
+// single previous output line.
 export function ensureGitHeaders(patch: string): string {
   const lines = patch.split("\n");
   const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const minus = line.match(/^--- a\/(.+)$/);
-    const prev = out[out.length - 1] ?? "";
-    if (minus && !prev.startsWith("diff --git ")) {
-      const p = minus[1];
-      out.push(`diff --git a/${p} b/${p}`);
+  let hasHeader = false;
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      hasHeader = true;
+      out.push(line);
+      continue;
+    }
+    const minus = line.match(/^--- a\/(.+?)\r?$/); // old-file marker, CRLF-tolerant
+    if (minus) {
+      if (!hasHeader) out.push(`diff --git a/${minus[1]} b/${minus[1]}`);
+      out.push(line);
+      hasHeader = false; // next file block starts fresh
+      continue;
     }
     out.push(line);
   }
