@@ -1,36 +1,36 @@
 // bb-plugin-guided-review — frontend entry.
 //
-// Placeholder homepage card until Task 13 registers the "Guided Review"
-// navPanel. Kept minimal so the bundle builds while the backend takes shape.
-import { definePluginApp, useRpc } from "@get-bb/plugin-sdk/app";
-import type { rpcContract } from "./server";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+// Registers the "Guided Review" navPanel (a sidebar entry + its own route).
+// The panel body is a placeholder until Tasks 13-15 build the real
+// list + chapter/diff workspace; this exists so the panel is clickable now.
+import { memo } from "react";
+import { definePluginApp } from "@get-bb/plugin-sdk/app";
 
-function StatusCard() {
-  const rpc = useRpc<typeof rpcContract>();
+const ReviewPanel = memo(function ReviewPanel(_props: { subPath: string }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Guided Review</CardTitle>
-      </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => void rpc.call("ping", null)}
-        >
-          Check backend
-        </Button>
-      </CardContent>
-    </Card>
+    <div className="mx-auto w-full max-w-3xl space-y-3 p-6">
+      <h2 className="text-lg font-semibold text-foreground">Guided Review</h2>
+      <p className="text-sm text-muted-foreground">
+        Start a review from a project thread. In that thread's terminal, run:
+      </p>
+      <pre className="rounded-md border border-border bg-card p-3 text-sm text-foreground">
+        bb review &lt;pr-url | pr-number | git-ref&gt;
+      </pre>
+      <p className="text-sm text-muted-foreground">
+        The chaptered walkthrough and diffs will render here. The interactive
+        panel (chapters, diff viewer, comments, submit) is being built out.
+      </p>
+    </div>
   );
-}
+});
+ReviewPanel.displayName = "ReviewPanel";
 
 export default definePluginApp((app) => {
-  app.slots.homepageSection({
-    id: "guided-review-status",
+  app.slots.navPanel({
+    id: "review",
     title: "Guided Review",
-    component: StatusCard,
+    icon: "GitPullRequest",
+    path: "review",
+    component: ReviewPanel,
   });
 });
