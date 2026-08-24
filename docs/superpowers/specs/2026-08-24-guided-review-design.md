@@ -69,25 +69,29 @@ Three bb-plugin bundles.
 - `bb review <target> [--base <ref>]` — resolves target, builds `guide.patch`,
   gathers metadata, kicks off generation, opens the panel focused on this review.
 
-**Agent tool**
-- `generate_review_guide(guide)` — called by the generation agent to persist the
-  `guide.json` it authored. The tool validates the shape + coverage and returns
-  errors for the agent to fix, or success.
+**Agent tools** (native, scoped to this plugin's generation thread via `configure()`)
+- `read_review_patch({ targetKey, offset?, limit? })` — returns the diff text
+  (paginated) so the generation agent gets the patch through a tool rather than
+  depending on file placement across hosts.
+- `generate_review_guide({ targetKey, guide })` — the generation agent calls this
+  to submit the guide it authored. Validates shape + coverage and returns errors
+  for the agent to fix, or success (this is plannotator's "verify coverage" gate).
 
-**HTTP routes** (auth: `token`; panel is the only caller)
-| Route | Purpose | Backed by |
-|-------|---------|-----------|
-| `GET /guide` | current guide.json | disk |
-| `GET /file?path=&side=` | file diff / blob for a chapter's file | `guide.patch` (parsed) |
-| `GET /pr` | PR metadata | `gh pr view --json` |
-| `GET /threads` | existing review comments/threads (read) | `gh api .../comments` |
-| `GET /checks` | CI status | `gh pr checks` / `gh api` |
-| `POST /draft/comment` | add/update a draft comment | disk (`review-draft.json`) |
-| `DELETE /draft/comment` | remove a draft comment | disk |
-| `POST /review/submit` | post batched review + verdict | `gh api .../pulls/{n}/reviews` |
-| `POST /assist` | scoped agent turn (explain/assess/draft) | bb agent run |
+**RPC methods** (frontend data plane via `bb.rpc`; the panel calls these with `useRpc`)
+| Method | Purpose | Backed by |
+|--------|---------|-----------|
+| `getGuide` | current guide.json | plugin db |
+| `getPatch` | full patch (for `@pierre/diffs`) | patch file on dataDir |
+| `getPr` | PR metadata | `gh pr view --json` |
+| `getThreads` | existing review comments/threads (read) | `gh api .../comments` |
+| `getChecks` | CI status | `gh pr checks` / `gh api` |
+| `saveDraftComment` | add/update a draft comment | plugin db (`review-draft`) |
+| `removeDraftComment` | remove a draft comment | plugin db |
+| `submitReview` | post batched review + verdict | `gh api .../pulls/{n}/reviews` |
+| `assist` | scoped agent turn (explain/assess/draft) | hidden bb thread |
 
-All GitHub-touching routes shell out to `gh` (no raw token handling in the plugin).
+GitHub-touching methods shell out to `gh` (no raw token handling in the plugin).
+`bb.http` is reserved for external callers/webhooks and is unused in Phase 1.
 
 ### 5.2 `bb.app` (frontend panel, React + Tailwind)
 
@@ -205,10 +209,21 @@ Phase 1. Reply/resolve of existing threads is Phase 2.
 - Re-review on new commits (diff since last review; highlight what changed).
 - Local-ref mode with shareable single-file HTML export.
 
-## 12. Open questions / assumptions
-- **Diff renderer:** assume `react-diff-view`; confirm license/bundle size at implementation.
-- **Agent run mechanism:** assume the plugin can spawn a scoped bb agent turn from the
-  backend (child thread or in-process). Exact SDK surface to be confirmed against the
-  bb-plugin-authoring skill / `@get-bb/plugin-sdk` at implementation time.
+## 12. Resolved decisions & assumptions
+- **Diff renderer — RESOLVED:** use `@pierre/diffs` (`parsePatchFiles` + `FileDiff`
+  from `@pierre/diffs/react`), shipped/shimmed by the SDK; renders exactly like bb's
+  own diff panel. Synthesize `diff --git a/<p> b/<p>` headers when `gh` output omits
+  them (same approach as the official `github` plugin).
+- **Agent run mechanism — RESOLVED:** generation runs as a hidden bb thread
+  (`bb.sdk.threads.spawn({ visibility: "hidden" })`), archived + stopped in a `finally`.
+  The agent gets the diff and submits the guide through two native tools
+  (`read_review_patch`, `generate_review_guide`) selected only for this plugin's own
+  spawned thread via `bb.agents.configure` (gated on `context.origin.pluginId`).
+- **Panel open — ASSUMPTION:** backend cannot force frontend navigation, so `bb review`
+  prepares the review and prints "open the Guided Review panel"; the panel (a `navPanel`)
+  lists reviews and the user opens the target. Auto-open is Phase 2.
+- **Host — ASSUMPTION:** Phase 1 targets a single local machine (server host == local),
+  so `gh`/`git` run server-local via `child_process`. Multi-host resolution
+  (ctx.threadId → environment → hostId, run through that host) is Phase 2.
 - **Multi-account `gh`:** two accounts are authed (`notpritamm` active). Use the active
   account; expose an override later if needed.
