@@ -9,6 +9,8 @@ import { rpcContract } from "./src/rpc-contract";
 import { createStore } from "./src/store";
 import { changedFiles } from "./src/patch";
 import { validateGuide, checkCoverage } from "./src/guide";
+import { runReviewCommand } from "./src/review-command";
+import { runGh, runGit } from "./src/gh";
 
 export { rpcContract } from "./src/rpc-contract";
 
@@ -60,4 +62,13 @@ export default async function plugin(bb: BbPluginApi) {
       ? { tools: ["read_review_patch", "generate_review_guide"], skills: ["guided-review-generate"] }
       : { tools: [], skills: [] },
   );
+
+  bb.cli.register({
+    name: "review",
+    summary: "Open a Guided Review of a GitHub PR or local git ref",
+    commands: [{ name: "review", summary: "Review a PR or ref", usage: "bb review <pr-url | pr-number | git-ref> [--base <ref>]" }],
+    async run(argv, ctx) {
+      return runReviewCommand({ bb, store, gh: { runGh, runGit } }, argv, ctx);
+    },
+  });
 }
