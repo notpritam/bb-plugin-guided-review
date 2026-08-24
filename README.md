@@ -1,101 +1,98 @@
-# bb-plugin-guided-review
+# Guided Review
 
-A BB plugin.
+A [bb](https://getbb.app) plugin that turns a GitHub pull request (or a local git ref) into an
+**agent-authored, chaptered walkthrough** — then lets you review it inside bb and submit the
+review back to GitHub.
 
-## UI components
+Instead of a flat list of files, a PR arrives as an ordered *story*: the implementation heart
+first, its consequences next, and the glue/config last. A bb agent reads the diff and writes the
+guide; you read the chapters, browse syntax-highlighted diffs, ask the agent questions inline,
+leave comments, and submit — all without leaving bb.
 
-`components/ui/` is vendored source you own (the shadcn model): edit the
-files freely — they never update out from under you. Add more from the BB
-component registry (the full shadcn set, version-matched to your BB install
-via the pinned ref in `components.json`):
+Inspired by [plannotator/guides](https://github.com/plannotator/guides) (the "guided review"
+concept and its `guide.json` shape), but native to bb: the generation engine is a bb agent, the
+viewer is a bb panel, and it writes back to GitHub — no external CLI and no third-party upload.
 
-```
-npx shadcn add @bb/dialog @bb/select
-```
+## Prerequisites
 
-Run `npm install` once before `bb plugin build` — the vendored components'
-npm deps bundle into your dist. React, and BB-shimmed packages like the
-radix portal primitives and `sonner` (`import { toast } from "sonner"`
-reaches BB's own toaster), are provided by the BB app at runtime and never
-bundled. Ship `dist/` (npm tarball or committed for git installs) so
-people installing your plugin never need npm.
-
-## Manifest
-
-`package.json` is the plugin manifest. Notable fields:
-
-- `bb.server` — backend entry (required); optional `bb.app` for a frontend.
-- `bb.name` and `bb.description` — required human-facing identity.
-- `bb.branding` — required; declare `icon` as a BB icon name or a
-  plugin-relative compact SVG, or declare `logo.light` (with optional
-  `logo.dark`). Logo assets must be relative `.svg`, `.png`, or
-  `.webp` files.
-- `engines.bb` — supported bb app version range.
-- `engines.bbPluginSdk` — the lowest plugin SDK you need (scaffold:
-  `>=0.4.8`). BB reads this as a floor, not a ceiling: a later
-  SDK in the same major still loads your plugin.
-- `dependencies` — every package your source imports that BB does not provide.
-  `bb plugin build` inlines them into `dist/`, and git installs resolve this
-  list alone, so a build-required package here rather than in
-  `devDependencies` is what keeps your plugin installable. `devDependencies`
-  is for types and tooling only (BB shims React, the portal primitives, and
-  `@get-bb/plugin-sdk` at runtime — never bundle them).
-
-Run `bb plugin build` before publishing git/npm installs. It writes
-`dist/server.js` + `server.meta.json` (and, with `bb.app`, `app.js` /
-`app.css` / `app.meta.json`). Each `*.meta.json` stamps SDK major/version,
-`artifactFormatVersion`, `pluginId`, `pluginVersion`, and
-`builtWith` so managed installs can verify the artifacts.
+- **`gh` (GitHub CLI)** installed and authenticated with `repo` scope (`gh auth login`). All
+  GitHub access is via `gh`, run locally — the plugin never handles a token.
+- **bb** ≥ 0.39.
 
 ## Install
 
-From this directory (`bb plugin new` already ran the install; a fresh clone
-needs it):
-
-```
+```sh
 npm install
 bb plugin install .
 ```
 
-After editing sources, reload:
+After editing sources: `bb plugin reload guided-review` (or run `bb plugin dev` to auto-rebuild).
 
-```
-bb plugin reload guided-review
-```
+## Usage
 
-## Configure
+From a project thread's terminal:
 
-```
-bb plugin config guided-review
-bb plugin config guided-review set greeting hi
+```sh
+bb review <pr-url | pr-number | git-ref> [--base <ref>]
 ```
 
-## Types & API reference
+Examples:
 
-The plugin API ships as the npm package `@get-bb/plugin-sdk`, pinned to an
-exact version in `devDependencies` (`0.4.8` — the SDK of the BB
-that scaffolded this plugin). After `npm install`, the full surface is on disk
-at:
-
-```
-node_modules/@get-bb/plugin-sdk/bundled-types/bb-plugin-sdk.d.ts      # backend
-node_modules/@get-bb/plugin-sdk/bundled-types/bb-plugin-sdk-app.d.ts  # frontend
+```sh
+bb review 1234                          # a PR number in the current repo
+bb review https://github.com/acme/web/pull/1234
+bb review origin/main...HEAD            # a local range
+bb review my-feature --base main        # a branch, compared against main
 ```
 
-Your editor and `tsc` resolve `@get-bb/plugin-sdk` there through ordinary node
-resolution — no path mapping. These are readable declarations: open them for an
-exact signature.
+Then open the **Guided Review** panel in the sidebar to watch the guide build and review it.
 
-The SDK surface grows with every BB release, so the pin has to track the BB you
-actually run:
+## What you get (Phase 1)
 
+- **Agent-generated guide** — a bb agent reads the diff and authors chapters
+  (`title` + `intent` + ordered sections of `{ overview, files }`), with a hard **coverage gate**
+  (every changed file lands in exactly one chapter or `unplacedFiles` — never twice, never
+  omitted).
+- **The panel** — chapter navigator on the left, `@pierre/diffs` syntax-highlighted diffs on the
+  right (rendered exactly like bb's own diff panel), a PR header, and a draft-review tray.
+- **Review actions** — per-line and per-chapter draft comments, a verdict
+  (Approve / Request changes / Comment), and **one batched submit** back to the real GitHub PR
+  (`gh api .../pulls/{n}/reviews`).
+- **Inline agent-assist** — ask the agent to explain a chapter, assess risk, or draft a comment
+  while you review.
+- **Context** — reads the PR title/body, existing review comments, and CI checks.
+
+Works on a GitHub PR (via `gh`) or any local git ref (branch / commit / range). Local-ref reviews
+skip the GitHub-only bits.
+
+## How it works
+
+- **`bb review` command** (`bb.cli`) — resolves the target, builds the patch (`gh pr diff` /
+  `git diff`), stores it, and kicks generation.
+- **Generation** — a hidden bb agent runs the bundled `guided-review-generate` skill, reading the
+  diff and submitting the guide through two native tools (`read_review_patch`,
+  `generate_review_guide`) that are exposed *only* to this plugin's own spawned thread
+  (`bb.agents.configure` gated on the origin plugin id).
+- **Store** — a per-plugin SQLite database holds the review, patch, guide, and draft.
+- **Panel ↔ backend** — a typed `bb.rpc` data plane; a `review:<target>` realtime signal tells
+  the panel to refetch when generation finishes.
+
+## Development
+
+```sh
+npm test            # vitest (unit + a frontend renderSlot test)
+npx tsc --noEmit    # typecheck
+bb plugin build     # compile dist/ (server + app bundles)
+bb plugin dev       # watch + reload on save
 ```
-bb plugin types          # sync this plugin's SDK surface to the running BB
-bb plugin types --check  # CI: fail when it does not match
-```
 
-Ask BB to write plugins for you: the `bb-plugin-authoring` skill documents
-the whole surface with examples.
+Design and implementation notes live in
+[`docs/superpowers/specs/`](docs/superpowers/specs/) and
+[`docs/superpowers/plans/`](docs/superpowers/plans/).
 
-Confused by the API, or need something the types don't explain? Clone the BB
-repo and read the source: <https://github.com/get-bb/bb>.
+## Roadmap (Phase 2)
+
+- Reply to and resolve existing PR review threads.
+- CI status panel + chapter risk flags populated by the generation agent.
+- Re-review on new commits (diff since last review; highlight what changed).
+- Local-ref mode with a shareable single-file HTML export.
