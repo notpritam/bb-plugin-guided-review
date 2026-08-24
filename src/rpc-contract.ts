@@ -20,10 +20,6 @@ export const rpcContract = defineRpcContract({
   ping: { input: z.null(), output: z.object({ ok: z.boolean() }) },
 
   // Task 10: read data plane
-  __seedForTest: {
-    input: z.object({ targetKey: z.string(), patch: z.string() }).strict(),
-    output: z.object({ ok: z.boolean() }),
-  },
   listReviews: { input: z.null(), output: z.object({ reviews: z.array(z.any()) }) },
   getReview: { input: targetKey, output: z.object({ review: z.any().nullable() }) },
   getGuide: { input: targetKey, output: z.object({ guide: z.any().nullable(), status: z.string() }) },

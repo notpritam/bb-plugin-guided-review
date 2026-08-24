@@ -27,11 +27,6 @@ export default async function plugin(bb: BbPluginApi) {
     },
 
     // Task 10: read data plane
-    __seedForTest({ targetKey, patch }) {
-      store.saveReview({ targetKey, kind: "pr", number: 1, repo: "acme/web", status: "ready", createdAt: Date.now() });
-      store.savePatch(targetKey, patch);
-      return { ok: true };
-    },
     listReviews() {
       // ReviewMeta rows carry optional fields as literal `undefined` own
       // properties (store.ts's rowToMeta), which the rpc layer's strict JSON
@@ -45,7 +40,8 @@ export default async function plugin(bb: BbPluginApi) {
       return { guide: store.getGuide(targetKey), status: store.getReview(targetKey)?.status ?? "error" };
     },
     getPatch({ targetKey }) {
-      return { patch: store.readPatch(targetKey, 0, 5_000_000).text };
+      const total = store.readPatch(targetKey, 0, 0).total;
+      return { patch: store.readPatch(targetKey, 0, total).text };
     },
     async getPr({ targetKey }) {
       const m = store.getReview(targetKey);
@@ -123,7 +119,8 @@ export default async function plugin(bb: BbPluginApi) {
     async execute({ targetKey, guide }) {
       const v = validateGuide(guide);
       if (!v.ok) return { content: [{ type: "text", text: "Invalid guide:\n" + v.errors.join("\n") }], isError: true };
-      const files = changedFiles(store.readPatch(targetKey, 0, 5_000_000).text);
+      const total = store.readPatch(targetKey, 0, 0).total;
+      const files = changedFiles(store.readPatch(targetKey, 0, total).text);
       const cov = checkCoverage(v.guide, files);
       if (!cov.ok) return { content: [{ type: "text", text: "Coverage errors:\n" + cov.errors.join("\n") }], isError: true };
       store.saveGuide(targetKey, v.guide);
@@ -132,11 +129,16 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   // Only expose these tools to THIS plugin's own spawned generation thread.
-  bb.agents.configure((context) =>
-    context.origin?.pluginId === bb.pluginId
+  // Both the generation thread and the assist Q&A thread are spawned by this
+  // plugin (origin.pluginId matches for both), so the origin check alone is
+  // not enough — gate on the generation thread's distinctive title too.
+  bb.agents.configure((context) => {
+    const isGenerationThread =
+      context.origin?.pluginId === bb.pluginId && (context.thread?.title ?? "").startsWith("Generate guide:");
+    return isGenerationThread
       ? { tools: ["read_review_patch", "generate_review_guide"], skills: ["guided-review-generate"] }
-      : { tools: [], skills: [] },
-  );
+      : { tools: [], skills: [] };
+  });
 
   bb.cli.register({
     name: "review",

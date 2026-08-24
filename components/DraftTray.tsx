@@ -30,23 +30,38 @@ export const DraftTray = memo(function DraftTray({
     setFile(activeFiles[0] ?? "");
   }, [activeFiles]);
 
+  const lineNum = Number(line);
+  const lineValid = Number.isInteger(lineNum) && lineNum > 0;
+
   async function addComment() {
-    const { draft } = await rpc.call("saveDraftComment", {
-      targetKey,
-      comment: { file, line: Number(line), side: "RIGHT", chapterId: activeChapterId, body },
-    });
-    setDraft(draft);
-    setBody("");
+    try {
+      const { draft } = await rpc.call("saveDraftComment", {
+        targetKey,
+        comment: { file, line: lineNum, side: "RIGHT", chapterId: activeChapterId, body },
+      });
+      setDraft(draft);
+      setBody("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Something went wrong");
+    }
   }
   async function removeComment(i: number) {
-    const { draft } = await rpc.call("removeDraftComment", { targetKey, index: i });
-    setDraft(draft);
+    try {
+      const { draft } = await rpc.call("removeDraftComment", { targetKey, index: i });
+      setDraft(draft);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Something went wrong");
+    }
   }
   async function submit() {
-    await rpc.call("setVerdict", { targetKey, verdict: draft.verdict, body: draft.body });
-    const res = await rpc.call("submitReview", { targetKey });
-    if (res.ok) toast.success("Review submitted to GitHub");
-    else toast.error(res.error ?? "Submit failed");
+    try {
+      await rpc.call("setVerdict", { targetKey, verdict: draft.verdict, body: draft.body });
+      const res = await rpc.call("submitReview", { targetKey });
+      if (res.ok) toast.success("Review submitted to GitHub");
+      else toast.error(res.error ?? "Submit failed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Something went wrong");
+    }
   }
 
   return (
@@ -87,9 +102,15 @@ export const DraftTray = memo(function DraftTray({
 
       <div className="flex items-end gap-2">
         <Input value={file} onChange={(e) => setFile(e.target.value)} placeholder="file" className="w-64" />
-        <Input value={line} onChange={(e) => setLine(e.target.value)} placeholder="line" className="w-20" />
+        <Input
+          type="number"
+          value={line}
+          onChange={(e) => setLine(e.target.value)}
+          placeholder="line"
+          className="w-20"
+        />
         <Textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="comment" className="flex-1" />
-        <Button size="sm" disabled={!file || !body} onClick={addComment}>
+        <Button size="sm" disabled={!file || !body || !lineValid} onClick={addComment}>
           Add
         </Button>
       </div>

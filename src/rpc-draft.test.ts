@@ -21,11 +21,14 @@ vi.mock("./gh", async (importOriginal) => {
 
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import plugin from "../server";
+import { createStore } from "./store";
 
 test("draft comment then submit builds a batched review", async () => {
   const { bb, harness } = createFakePluginHost({ pluginId: "guided-review" });
   await plugin(bb);
-  await harness.behavior.callRpc("__seedForTest", { targetKey: "pr-1", patch: "diff --git a/a.ts b/a.ts\n" });
+  const store = createStore(bb);
+  store.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, repo: "acme/web", status: "ready", createdAt: 1 });
+  store.savePatch("pr-1", "diff --git a/a.ts b/a.ts\n");
   await harness.behavior.callRpc("saveDraftComment", {
     targetKey: "pr-1",
     comment: { file: "a.ts", line: 1, side: "RIGHT", body: "nit" },

@@ -1,6 +1,6 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Store } from "./store";
-import { parseTarget, targetKey, type ReviewTarget } from "./targets";
+import { parseTarget, targetKey } from "./targets";
 import { ensureGitHeaders } from "./patch";
 import { generateGuide } from "./generate";
 import {
