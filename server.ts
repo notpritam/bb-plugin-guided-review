@@ -10,6 +10,7 @@ import { createStore } from "./src/store";
 import { changedFiles } from "./src/patch";
 import { validateGuide, checkCoverage } from "./src/guide";
 import { runReviewCommand } from "./src/review-command";
+import { runAssist } from "./src/assist";
 import { ghPrViewArgs, ghPrCommentsArgs, ghPrChecksArgs, ghSubmitReviewArgs, runGh, runGit } from "./src/gh";
 import { toGithubReviewPayload } from "./src/draft";
 
@@ -87,6 +88,15 @@ export default async function plugin(bb: BbPluginApi) {
       const r = await runGh(ghSubmitReviewArgs(m.repo, m.number), { stdin: JSON.stringify(payload) });
       if (r.code !== 0) return { ok: false, error: r.stderr || "gh review submit failed" };
       return { ok: true };
+    },
+
+    // Task 12: inline agent-assist
+    async assist({ targetKey, chapterId, file, question }) {
+      const m = store.getReview(targetKey);
+      if (!m?.projectId) {
+        return { answer: "This review has no associated project; re-run `bb review` inside a project." };
+      }
+      return runAssist(bb, store, { targetKey, chapterId, file, question, projectId: m.projectId });
     },
   });
 

@@ -53,4 +53,17 @@ export const rpcContract = defineRpcContract({
     output: z.object({ draft: z.any() }),
   },
   submitReview: { input: targetKey, output: z.object({ ok: z.boolean(), error: z.string().optional() }) },
+
+  // Task 12: inline agent-assist
+  assist: {
+    input: z
+      .object({
+        targetKey: z.string(),
+        chapterId: z.string().optional(),
+        file: z.string().optional(),
+        question: z.string().min(1),
+      })
+      .strict(),
+    output: z.object({ answer: z.string() }),
+  },
 });

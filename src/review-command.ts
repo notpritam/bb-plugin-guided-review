@@ -29,17 +29,27 @@ export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
 
   let patch = "";
   const meta: any = { targetKey: key, kind: target.kind, status: "generating", createdAt: now };
+  meta.projectId = ctx.projectId;
 
   if (target.kind === "pr") {
     let repo = target.repo;
     if (!repo) {
       const r = await deps.gh.runGh(ghRepoViewArgs(), { cwd });
       if (r.code !== 0) return { exitCode: 1, stderr: ghError(r.stderr) };
-      repo = JSON.parse(r.stdout).nameWithOwner as string;
+      try {
+        repo = JSON.parse(r.stdout).nameWithOwner as string;
+      } catch {
+        return { exitCode: 1, stderr: "Unexpected gh output (could not parse JSON)." };
+      }
     }
     const view = await deps.gh.runGh(ghPrViewArgs(target.number, repo), { cwd });
     if (view.code !== 0) return { exitCode: 1, stderr: ghError(view.stderr) };
-    const pr = JSON.parse(view.stdout);
+    let pr: any;
+    try {
+      pr = JSON.parse(view.stdout);
+    } catch {
+      return { exitCode: 1, stderr: "Unexpected gh output (could not parse JSON)." };
+    }
     Object.assign(meta, {
       number: target.number, repo, title: pr.title, author: pr.author?.login,
       base: pr.baseRefName, head: pr.headRefName, url: pr.url, gitRef: `${pr.baseRefName}...${pr.headRefName}`,
@@ -70,7 +80,7 @@ export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
 }
 
 function ghError(stderr: string): string {
-  if (/gh auth login|not logged|authentication/i.test(stderr)) {
+  if (/gh auth login|not logged|authentication|bad credentials|http 401/i.test(stderr)) {
     return "GitHub CLI is not authenticated. Run `gh auth login` (needs `repo` scope), then retry.";
   }
   return stderr || "gh command failed";

@@ -15,6 +15,7 @@ export interface ReviewMeta {
   url?: string;
   status: "generating" | "ready" | "error";
   createdAt: number;
+  projectId?: string;
 }
 
 export interface Store {
@@ -42,27 +43,29 @@ export function createStore(bb: BbPluginApi): Store {
     `CREATE TABLE IF NOT EXISTS patches (target_key TEXT PRIMARY KEY, patch TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS guides (target_key TEXT PRIMARY KEY, guide TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS drafts (target_key TEXT PRIMARY KEY, verdict TEXT NOT NULL, body TEXT NOT NULL, comments TEXT NOT NULL)`,
+    `ALTER TABLE reviews ADD COLUMN project_id TEXT`,
   ]);
 
   const rowToMeta = (r: any): ReviewMeta => ({
     targetKey: r.target_key, kind: r.kind, number: r.number ?? undefined, repo: r.repo ?? undefined,
     title: r.title ?? undefined, author: r.author ?? undefined, base: r.base ?? undefined,
     head: r.head ?? undefined, gitRef: r.git_ref ?? undefined, url: r.url ?? undefined,
-    status: r.status, createdAt: r.created_at,
+    status: r.status, createdAt: r.created_at, projectId: r.project_id ?? undefined,
   });
 
   return {
     saveReview(m) {
       db.prepare(
-        `INSERT INTO reviews (target_key,kind,number,repo,title,author,base,head,git_ref,url,status,created_at)
-         VALUES (@targetKey,@kind,@number,@repo,@title,@author,@base,@head,@gitRef,@url,@status,@createdAt)
+        `INSERT INTO reviews (target_key,kind,number,repo,title,author,base,head,git_ref,url,status,created_at,project_id)
+         VALUES (@targetKey,@kind,@number,@repo,@title,@author,@base,@head,@gitRef,@url,@status,@createdAt,@projectId)
          ON CONFLICT(target_key) DO UPDATE SET
            kind=@kind,number=@number,repo=@repo,title=@title,author=@author,base=@base,head=@head,
-           git_ref=@gitRef,url=@url,status=@status,created_at=@createdAt`,
+           git_ref=@gitRef,url=@url,status=@status,created_at=@createdAt,project_id=@projectId`,
       ).run({
         targetKey: m.targetKey, kind: m.kind, number: m.number ?? null, repo: m.repo ?? null,
         title: m.title ?? null, author: m.author ?? null, base: m.base ?? null, head: m.head ?? null,
         gitRef: m.gitRef ?? null, url: m.url ?? null, status: m.status, createdAt: m.createdAt,
+        projectId: m.projectId ?? null,
       });
     },
     getReview(k) {
