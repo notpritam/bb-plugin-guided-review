@@ -1064,18 +1064,27 @@ export async function generateGuide(
   targetKey: string,
   projectId: string,
 ): Promise<void> {
-  const worker = await bb.sdk.threads.spawn({
-    projectId,
-    environment: { type: "project-default" },
-    prompt: buildGenerationPrompt(targetKey),
-    title: `Generate guide: ${targetKey}`,
-    visibility: "hidden",
-  });
+  // Finalize status + realtime signal on EVERY path: catch spawn/wait failure
+  // so the review never gets stuck at "generating". Clean up only if a worker
+  // was actually spawned.
+  let workerId: string | undefined;
   try {
+    const worker = await bb.sdk.threads.spawn({
+      projectId,
+      environment: { type: "project-default" },
+      prompt: buildGenerationPrompt(targetKey),
+      title: `Generate guide: ${targetKey}`,
+      visibility: "hidden",
+    });
+    workerId = worker.id;
     await bb.sdk.threads.wait({ threadId: worker.id, status: "idle" });
+  } catch {
+    // spawn/wait failed — fall through and finalize as error below
   } finally {
-    await bb.sdk.threads.archive({ threadId: worker.id }).catch(() => {});
-    await bb.sdk.threads.stop({ threadId: worker.id }).catch(() => {});
+    if (workerId) {
+      await bb.sdk.threads.archive({ threadId: workerId }).catch(() => {});
+      await bb.sdk.threads.stop({ threadId: workerId }).catch(() => {});
+    }
   }
   const ok = store.getGuide(targetKey) !== null;
   store.setStatus(targetKey, ok ? "ready" : "error");
