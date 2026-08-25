@@ -16,6 +16,8 @@ export interface ReviewMeta {
   status: "generating" | "ready" | "error";
   createdAt: number;
   projectId?: string;
+  headSha?: string;
+  cwd?: string;
 }
 
 export interface Store {
@@ -44,6 +46,8 @@ export function createStore(bb: BbPluginApi): Store {
     `CREATE TABLE IF NOT EXISTS guides (target_key TEXT PRIMARY KEY, guide TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS drafts (target_key TEXT PRIMARY KEY, verdict TEXT NOT NULL, body TEXT NOT NULL, comments TEXT NOT NULL)`,
     `ALTER TABLE reviews ADD COLUMN project_id TEXT`,
+    `ALTER TABLE reviews ADD COLUMN head_sha TEXT`,
+    `ALTER TABLE reviews ADD COLUMN cwd TEXT`,
   ]);
 
   const rowToMeta = (r: any): ReviewMeta => ({
@@ -51,21 +55,23 @@ export function createStore(bb: BbPluginApi): Store {
     title: r.title ?? undefined, author: r.author ?? undefined, base: r.base ?? undefined,
     head: r.head ?? undefined, gitRef: r.git_ref ?? undefined, url: r.url ?? undefined,
     status: r.status, createdAt: r.created_at, projectId: r.project_id ?? undefined,
+    headSha: r.head_sha ?? undefined, cwd: r.cwd ?? undefined,
   });
 
   return {
     saveReview(m) {
       db.prepare(
-        `INSERT INTO reviews (target_key,kind,number,repo,title,author,base,head,git_ref,url,status,created_at,project_id)
-         VALUES (@targetKey,@kind,@number,@repo,@title,@author,@base,@head,@gitRef,@url,@status,@createdAt,@projectId)
+        `INSERT INTO reviews (target_key,kind,number,repo,title,author,base,head,git_ref,url,status,created_at,project_id,head_sha,cwd)
+         VALUES (@targetKey,@kind,@number,@repo,@title,@author,@base,@head,@gitRef,@url,@status,@createdAt,@projectId,@headSha,@cwd)
          ON CONFLICT(target_key) DO UPDATE SET
            kind=@kind,number=@number,repo=@repo,title=@title,author=@author,base=@base,head=@head,
-           git_ref=@gitRef,url=@url,status=@status,created_at=@createdAt,project_id=@projectId`,
+           git_ref=@gitRef,url=@url,status=@status,created_at=@createdAt,project_id=@projectId,
+           head_sha=@headSha,cwd=@cwd`,
       ).run({
         targetKey: m.targetKey, kind: m.kind, number: m.number ?? null, repo: m.repo ?? null,
         title: m.title ?? null, author: m.author ?? null, base: m.base ?? null, head: m.head ?? null,
         gitRef: m.gitRef ?? null, url: m.url ?? null, status: m.status, createdAt: m.createdAt,
-        projectId: m.projectId ?? null,
+        projectId: m.projectId ?? null, headSha: m.headSha ?? null, cwd: m.cwd ?? null,
       });
     },
     getReview(k) {

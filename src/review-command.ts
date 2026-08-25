@@ -30,6 +30,7 @@ export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
   let patch = "";
   const meta: any = { targetKey: key, kind: target.kind, status: "generating", createdAt: now };
   meta.projectId = ctx.projectId;
+  meta.cwd = ctx.cwd;
 
   if (target.kind === "pr") {
     let repo = target.repo;
@@ -54,6 +55,7 @@ export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
       number: target.number, repo, title: pr.title, author: pr.author?.login,
       base: pr.baseRefName, head: pr.headRefName, url: pr.url, gitRef: `${pr.baseRefName}...${pr.headRefName}`,
     });
+    meta.headSha = pr.headRefOid;
     const diff = await deps.gh.runGh(ghPrDiffArgs(target.number, repo), { cwd });
     if (diff.code !== 0) return { exitCode: 1, stderr: ghError(diff.stderr) };
     patch = diff.stdout;

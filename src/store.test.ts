@@ -23,6 +23,14 @@ test("patch paginates", () => {
   expect(s.readPatch("pr-1", 3, 10)).toEqual({ text: "def", total: 6 });
 });
 
+test("saveReview round-trips headSha and cwd", () => {
+  const s = store();
+  s.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, status: "generating", createdAt: 1, headSha: "abc", cwd: "/repo" });
+  const meta = s.getReview("pr-1");
+  expect(meta?.headSha).toBe("abc");
+  expect(meta?.cwd).toBe("/repo");
+});
+
 test("draft comments upsert and delete", () => {
   const s = store();
   s.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, status: "ready", createdAt: 1 });
