@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { useRpc, useRealtime } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
+import type { DraftComment } from "../src/draft";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { ReviewHeader } from "./ReviewHeader";
@@ -20,20 +21,26 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const [activeId, setActiveId] = useState("");
   const [view, setView] = useState<"diff" | "threads">("diff");
   const [repoAccess, setRepoAccess] = useState<{ accessible: boolean; repo: string | null; account: string | null } | null>(null);
+  // Draft (pending comments + verdict) is owned here so the inline diff
+  // annotations (DiffViewer) and the review tray (DraftTray) always render
+  // the same underlying state.
+  const [draft, setDraft] = useState<any>({ verdict: "COMMENT", body: "", comments: [] });
 
   const load = useMemo(
     () => async () => {
       try {
-        const [{ review }, { guide }, { patch }, checksRes] = await Promise.all([
+        const [{ review }, { guide }, { patch }, checksRes, { draft }] = await Promise.all([
           rpc.call("getReview", { targetKey }),
           rpc.call("getGuide", { targetKey }),
           rpc.call("getPatch", { targetKey }),
           rpc.call("getChecks", { targetKey }),
+          rpc.call("getDraft", { targetKey }),
         ]);
         setReview(review);
         setGuide(guide);
         setPatch(patch);
         setChecks(checksRes);
+        setDraft(draft);
         if (guide?.sections?.[0]) setActiveId((prev) => prev || guide.sections[0].id);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to load review");
@@ -48,6 +55,23 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   useRealtime(`review:${targetKey}`, () => {
     void load();
   });
+
+  async function addComment(comment: DraftComment) {
+    try {
+      const { draft } = await rpc.call("saveDraftComment", { targetKey, comment });
+      setDraft(draft);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Something went wrong");
+    }
+  }
+  async function removeComment(index: number) {
+    try {
+      const { draft } = await rpc.call("removeDraftComment", { targetKey, index });
+      setDraft(draft);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Something went wrong");
+    }
+  }
 
   const checkAccess = useMemo(
     () => async () => {
@@ -130,14 +154,28 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             {view === "diff" ? (
-              <DiffViewer patch={patch} files={activeFiles} />
+              <DiffViewer
+                patch={patch}
+                files={activeFiles}
+                draft={draft}
+                addComment={addComment}
+                removeComment={removeComment}
+                activeChapterId={activeId}
+              />
             ) : (
               <ThreadsPanel targetKey={targetKey} />
             )}
           </div>
         </main>
       </div>
-      <DraftTray targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} />
+      <DraftTray
+        targetKey={targetKey}
+        activeChapterId={activeId}
+        activeFiles={activeFiles}
+        draft={draft}
+        setDraft={setDraft}
+        removeComment={removeComment}
+      />
     </div>
   );
 });
