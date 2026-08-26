@@ -203,11 +203,13 @@ Phase 1. Reply/resolve of existing threads is Phase 2.
 - Submit as a batched GitHub review (Approve / Request changes / Comment).
 - Read PR title/body + existing comments + CI status (read-only).
 
-### Phase 2 (best-in-class)
-- Reply to and resolve existing PR threads.
-- Chapter risk flags populated by the generation agent.
-- Re-review on new commits (diff since last review; highlight what changed).
-- Local-ref mode with shareable single-file HTML export.
+### Phase 2 (best-in-class) — DELIVERED (2026-08-26)
+- ✅ Reply to and resolve existing PR review threads (GraphQL review threads + resolve/unresolve).
+- ✅ CI status surfaced in the panel header (`gh pr checks --json`).
+- ✅ Chapter risk flags populated by the generation agent.
+- ✅ Re-review on new commits (head-SHA comparison; one-click re-run of the review).
+- ✅ Authoritative `guide.review.gitRef` (stamped server-side).
+- Deferred by choice: single-file HTML export + encrypted share links (guides.show-style).
 
 ## 12. Resolved decisions & assumptions
 - **Diff renderer — RESOLVED:** use `@pierre/diffs` (`parsePatchFiles` + `FileDiff`

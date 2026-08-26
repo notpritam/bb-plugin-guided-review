@@ -47,7 +47,7 @@ bb review my-feature --base main        # a branch, compared against main
 
 Then open the **Guided Review** panel in the sidebar to watch the guide build and review it.
 
-## What you get (Phase 1)
+## What you get
 
 - **Agent-generated guide** — a bb agent reads the diff and authors chapters
   (`title` + `intent` + ordered sections of `{ overview, files }`), with a hard **coverage gate**
@@ -60,7 +60,13 @@ Then open the **Guided Review** panel in the sidebar to watch the guide build an
   (`gh api .../pulls/{n}/reviews`).
 - **Inline agent-assist** — ask the agent to explain a chapter, assess risk, or draft a comment
   while you review.
-- **Context** — reads the PR title/body, existing review comments, and CI checks.
+- **CI status** — the PR's checks (pass / fail / pending) surface in the panel header.
+- **Chapter risk badges** — the generation agent flags each chapter `low` / `medium` / `high`.
+- **Existing review threads** — see, reply to, and resolve / unresolve the PR's existing review
+  threads inline, beside the diff.
+- **Re-review on new commits** — when the PR head moves, a banner offers a one-click re-review
+  that rebuilds the guide against the new diff.
+- **Context** — reads the PR title/body and existing review comments.
 
 Works on a GitHub PR (via `gh`) or any local git ref (branch / commit / range). Local-ref reviews
 skip the GitHub-only bits.
@@ -90,9 +96,7 @@ Design and implementation notes live in
 [`docs/superpowers/specs/`](docs/superpowers/specs/) and
 [`docs/superpowers/plans/`](docs/superpowers/plans/).
 
-## Roadmap (Phase 2)
+## Roadmap
 
-- Reply to and resolve existing PR review threads.
-- CI status panel + chapter risk flags populated by the generation agent.
-- Re-review on new commits (diff since last review; highlight what changed).
-- Local-ref mode with a shareable single-file HTML export.
+- Portable single-file HTML export of a guide, and optional end-to-end-encrypted share links
+  (à la plannotator's guides.show). Deferred by choice — the review experience lives in bb today.
