@@ -26,7 +26,30 @@ export const rpcContract = defineRpcContract({
   getPatch: { input: targetKey, output: z.object({ patch: z.string() }) },
   getPr: { input: targetKey, output: z.object({ pr: z.any().nullable() }) },
   getThreads: { input: targetKey, output: z.object({ comments: z.array(z.any()) }) },
-  getChecks: { input: targetKey, output: z.object({ checks: z.string() }) },
+  getChecks: { input: targetKey, output: z.object({ bucket: z.string(), checks: z.array(z.any()) }) },
+
+  // Phase 2: review threads, reply/resolve, staleness, re-review
+  getReviewThreads: { input: targetKey, output: z.object({ threads: z.array(z.any()) }) },
+  replyToThread: {
+    input: z.object({ targetKey: z.string(), inReplyTo: z.number().int(), body: z.string().min(1) }).strict(),
+    output: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
+  resolveThread: {
+    input: z.object({ targetKey: z.string(), threadId: z.string() }).strict(),
+    output: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
+  unresolveThread: {
+    input: z.object({ targetKey: z.string(), threadId: z.string() }).strict(),
+    output: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
+  checkForUpdates: {
+    input: targetKey,
+    output: z.object({ hasNewCommits: z.boolean(), current: z.string().optional(), stored: z.string().optional() }),
+  },
+  rereview: {
+    input: targetKey,
+    output: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
 
   // Task 11: draft + submit
   getDraft: { input: targetKey, output: z.object({ draft: z.any() }) },

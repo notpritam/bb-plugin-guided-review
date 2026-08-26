@@ -11,8 +11,22 @@ import { changedFiles } from "./src/patch";
 import { validateGuide, checkCoverage } from "./src/guide";
 import { runReviewCommand } from "./src/review-command";
 import { runAssist } from "./src/assist";
-import { ghPrViewArgs, ghPrCommentsArgs, ghPrChecksArgs, ghSubmitReviewArgs, runGh, runGit } from "./src/gh";
+import {
+  ghPrViewArgs,
+  ghPrCommentsArgs,
+  ghPrChecksJsonArgs,
+  ghSubmitReviewArgs,
+  ghReviewThreadsArgs,
+  ghReplyThreadArgs,
+  ghResolveThreadArgs,
+  ghUnresolveThreadArgs,
+  ghPrHeadArgs,
+  runGh,
+  runGit,
+} from "./src/gh";
 import { toGithubReviewPayload } from "./src/draft";
+import { parseChecks, parseReviewThreads } from "./src/threads";
+import { rerunReview } from "./src/rereview";
 
 export { rpcContract } from "./src/rpc-contract";
 
@@ -57,9 +71,49 @@ export default async function plugin(bb: BbPluginApi) {
     },
     async getChecks({ targetKey }) {
       const m = store.getReview(targetKey);
-      if (!m || m.kind !== "pr" || !m.number) return { checks: "" };
-      const r = await runGh(ghPrChecksArgs(m.number, m.repo));
-      return { checks: r.stdout || r.stderr };
+      if (!m || m.kind !== "pr" || !m.number) return { bucket: "none", checks: [] };
+      const r = await runGh(ghPrChecksJsonArgs(m.number, m.repo));
+      const parsed = parseChecks(r.code === 0 ? r.stdout : "");
+      return { bucket: parsed.bucket, checks: parsed.checks };
+    },
+
+    // Phase 2: review threads, reply/resolve, staleness, re-review
+    async getReviewThreads({ targetKey }) {
+      const m = store.getReview(targetKey);
+      if (!m || m.kind !== "pr" || !m.number || !m.repo) return { threads: [] };
+      const [owner, repo] = m.repo.split("/");
+      const r = await runGh(ghReviewThreadsArgs(owner, repo, m.number));
+      return { threads: parseReviewThreads(r.code === 0 ? r.stdout : "").threads };
+    },
+    async replyToThread({ targetKey, inReplyTo, body }) {
+      const m = store.getReview(targetKey);
+      if (!m || m.kind !== "pr" || !m.number || !m.repo) return { ok: false, error: "Not a PR." };
+      const r = await runGh(ghReplyThreadArgs(m.repo, m.number, inReplyTo), { stdin: JSON.stringify({ body }) });
+      return r.code === 0 ? { ok: true } : { ok: false, error: r.stderr || "reply failed" };
+    },
+    async resolveThread({ threadId }) {
+      const r = await runGh(ghResolveThreadArgs(threadId));
+      return r.code === 0 ? { ok: true } : { ok: false, error: r.stderr || "resolve failed" };
+    },
+    async unresolveThread({ threadId }) {
+      const r = await runGh(ghUnresolveThreadArgs(threadId));
+      return r.code === 0 ? { ok: true } : { ok: false, error: r.stderr || "unresolve failed" };
+    },
+    async checkForUpdates({ targetKey }) {
+      const m = store.getReview(targetKey);
+      if (!m || m.kind !== "pr" || !m.number) return { hasNewCommits: false };
+      const r = await runGh(ghPrHeadArgs(m.number, m.repo));
+      if (r.code !== 0) return { hasNewCommits: false };
+      let head: any;
+      try {
+        head = JSON.parse(r.stdout);
+      } catch {
+        return { hasNewCommits: false };
+      }
+      return { hasNewCommits: !!m.headSha && head.headRefOid !== m.headSha, current: head.headRefOid, stored: m.headSha };
+    },
+    async rereview({ targetKey }) {
+      return rerunReview({ bb, store, gh: { runGh, runGit } }, targetKey);
     },
 
     // Task 11: draft + submit
