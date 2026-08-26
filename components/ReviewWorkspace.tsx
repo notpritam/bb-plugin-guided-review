@@ -1,29 +1,41 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { useRpc, useRealtime } from "@get-bb/plugin-sdk/app";
+import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
+import { Button } from "./ui/button";
 import { ReviewHeader } from "./ReviewHeader";
 import { ChapterNav } from "./ChapterNav";
 import { DiffViewer } from "./DiffViewer";
 import { DraftTray } from "./DraftTray";
+import { RereviewBanner } from "./RereviewBanner";
+import { ThreadsPanel } from "./ThreadsPanel";
 
 export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { targetKey: string }) {
   const rpc = useRpc<typeof rpcContract>();
   const [review, setReview] = useState<any>(null);
   const [guide, setGuide] = useState<any>(null);
   const [patch, setPatch] = useState("");
+  const [checks, setChecks] = useState<{ bucket: string; checks: any[] } | null>(null);
   const [activeId, setActiveId] = useState("");
+  const [view, setView] = useState<"diff" | "threads">("diff");
 
   const load = useMemo(
     () => async () => {
-      const [{ review }, { guide }, { patch }] = await Promise.all([
-        rpc.call("getReview", { targetKey }),
-        rpc.call("getGuide", { targetKey }),
-        rpc.call("getPatch", { targetKey }),
-      ]);
-      setReview(review);
-      setGuide(guide);
-      setPatch(patch);
-      if (guide?.sections?.[0]) setActiveId((prev) => prev || guide.sections[0].id);
+      try {
+        const [{ review }, { guide }, { patch }, checksRes] = await Promise.all([
+          rpc.call("getReview", { targetKey }),
+          rpc.call("getGuide", { targetKey }),
+          rpc.call("getPatch", { targetKey }),
+          rpc.call("getChecks", { targetKey }),
+        ]);
+        setReview(review);
+        setGuide(guide);
+        setPatch(patch);
+        setChecks(checksRes);
+        if (guide?.sections?.[0]) setActiveId((prev) => prev || guide.sections[0].id);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to load review");
+      }
     },
     [rpc, targetKey],
   );
@@ -51,15 +63,30 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border p-3">
-        <ReviewHeader review={review} />
+        <ReviewHeader review={review} checks={checks} />
         <p className="mt-1 text-sm text-foreground">{guide.intent}</p>
       </div>
+      <RereviewBanner targetKey={targetKey} />
       <div className="flex min-h-0 flex-1">
         <aside className="w-72 shrink-0 overflow-y-auto border-r border-border p-3">
           <ChapterNav sections={guide.sections} activeId={activeId} onSelect={setActiveId} />
         </aside>
-        <main className="min-w-0 flex-1 overflow-y-auto p-4">
-          <DiffViewer patch={patch} files={activeFiles} />
+        <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+          <div className="flex items-center gap-1 border-b border-border px-3 py-1.5">
+            <Button variant={view === "diff" ? "secondary" : "ghost"} size="sm" onClick={() => setView("diff")}>
+              Diff
+            </Button>
+            <Button variant={view === "threads" ? "secondary" : "ghost"} size="sm" onClick={() => setView("threads")}>
+              Threads
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {view === "diff" ? (
+              <DiffViewer patch={patch} files={activeFiles} />
+            ) : (
+              <ThreadsPanel targetKey={targetKey} />
+            )}
+          </div>
         </main>
       </div>
       <DraftTray targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} />
