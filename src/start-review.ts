@@ -4,6 +4,8 @@ import { parseTarget, targetKey } from "./targets";
 import { ensureGitHeaders } from "./patch";
 import { generateGuide } from "./generate";
 import { ghPrViewArgs, ghPrDiffArgs } from "./gh";
+import { getGhAccounts } from "./gh-accounts";
+import { describeGhFailure } from "./gh-errors";
 
 interface Deps {
   bb: BbPluginApi;
@@ -30,7 +32,7 @@ export async function createPrReview(
   }
 
   const view = await deps.gh.runGh(ghPrViewArgs(target.number, target.repo));
-  if (view.code !== 0) return { ok: false, error: ghError(view.stderr) };
+  if (view.code !== 0) return { ok: false, error: await ghError(deps, view.stderr, target.repo) };
   let pr: any;
   try {
     pr = JSON.parse(view.stdout);
@@ -39,7 +41,7 @@ export async function createPrReview(
   }
 
   const diff = await deps.gh.runGh(ghPrDiffArgs(target.number, target.repo));
-  if (diff.code !== 0) return { ok: false, error: ghError(diff.stderr) };
+  if (diff.code !== 0) return { ok: false, error: await ghError(deps, diff.stderr, target.repo) };
   if (!diff.stdout.trim()) return { ok: false, error: "No changes found for that PR." };
 
   const key = targetKey(target);
@@ -69,9 +71,10 @@ export async function createPrReview(
   return { ok: true, targetKey: key };
 }
 
-function ghError(stderr: string): string {
+async function ghError(deps: Deps, stderr: string, repo?: string): Promise<string> {
   if (/gh auth login|not logged|authentication|bad credentials|http 401/i.test(stderr)) {
     return "GitHub CLI is not authenticated. Run `gh auth login` (needs `repo` scope), then retry.";
   }
-  return stderr || "gh command failed";
+  const { active } = await getGhAccounts(deps.gh.runGh);
+  return describeGhFailure({ stderr, repo, activeAccount: active });
 }

@@ -1,12 +1,18 @@
 import { test, expect, vi } from "vitest";
 
+let diffFails = false;
+
 vi.mock("./gh", async (orig) => {
   const real = await orig<any>();
   return {
     ...real,
     runGh: vi.fn(async (args: string[]) => {
-      if (args[1] === "diff") return { stdout: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-o\n+n\n", stderr: "", code: 0 };
+      if (args[1] === "diff") {
+        if (diffFails) return { stdout: "", stderr: "gh: Not Found (HTTP 404)", code: 1 };
+        return { stdout: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-o\n+n\n", stderr: "", code: 0 };
+      }
       if (args[1] === "view") return { stdout: JSON.stringify({ headRefOid: "newsha" }), stderr: "", code: 0 };
+      if (args[0] === "api" && args[1] === "user") return { stdout: "octocat\n", stderr: "", code: 0 };
       return { stdout: "", stderr: "", code: 0 };
     }),
     runGit: vi.fn(async () => ({ stdout: "--- a/b.ts\n+++ b/b.ts\n@@ -1 +1 @@\n-o\n+n\n", stderr: "", code: 0 })),
@@ -77,4 +83,26 @@ test("rerunReview fails for an unknown target", async () => {
   const store = createStore(bb);
   const res = await rerunReview({ bb, store, gh }, "missing");
   expect(res.ok).toBe(false);
+});
+
+test("rerunReview turns a raw gh 404 on `pr diff` into an actionable wrong-account message", async () => {
+  diffFails = true;
+  try {
+    const { bb } = host();
+    const store = createStore(bb);
+    store.saveReview({
+      targetKey: "pr-7", kind: "pr", number: 7, repo: "acme/web", status: "ready", createdAt: 1,
+      projectId: "p1", headSha: "oldsha", gitRef: "main...feature",
+    });
+
+    const res = await rerunReview({ bb, store, gh }, "pr-7");
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("octocat");
+    expect(res.error).toContain("acme/web");
+    expect(res.error?.toLowerCase()).toContain("switch");
+    expect(res.error).not.toContain("HTTP 404");
+  } finally {
+    diffFails = false;
+  }
 });

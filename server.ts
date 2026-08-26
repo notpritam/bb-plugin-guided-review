@@ -29,6 +29,7 @@ import { toGithubReviewPayload } from "./src/draft";
 import { parseChecks, parseReviewThreads } from "./src/threads";
 import { rerunReview } from "./src/rereview";
 import { getGhAccounts, switchGhAccount, checkRepoAccess } from "./src/gh-accounts";
+import { describeGhFailure } from "./src/gh-errors";
 
 export { rpcContract } from "./src/rpc-contract";
 
@@ -154,7 +155,10 @@ export default async function plugin(bb: BbPluginApi) {
       }
       const payload = toGithubReviewPayload(store.getDraft(targetKey));
       const r = await runGh(ghSubmitReviewArgs(m.repo, m.number), { stdin: JSON.stringify(payload) });
-      if (r.code !== 0) return { ok: false, error: r.stderr || "gh review submit failed" };
+      if (r.code !== 0) {
+        const { active } = await getGhAccounts(runGh);
+        return { ok: false, error: describeGhFailure({ stderr: r.stderr, repo: m.repo, activeAccount: active }) };
+      }
       return { ok: true };
     },
 

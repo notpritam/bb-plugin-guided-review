@@ -3,6 +3,8 @@ import type { Store } from "./store";
 import { ensureGitHeaders } from "./patch";
 import { generateGuide } from "./generate";
 import { ghPrDiffArgs, ghPrHeadArgs, gitDiffArgs } from "./gh";
+import { getGhAccounts } from "./gh-accounts";
+import { describeGhFailure } from "./gh-errors";
 
 interface Deps {
   bb: BbPluginApi; store: Store;
@@ -16,7 +18,10 @@ export async function rerunReview(deps: Deps, targetKey: string): Promise<{ ok: 
   let patch = "";
   if (m.kind === "pr" && m.number) {
     const diff = await deps.gh.runGh(ghPrDiffArgs(m.number, m.repo));
-    if (diff.code !== 0) return { ok: false, error: diff.stderr || "gh pr diff failed" };
+    if (diff.code !== 0) {
+      const { active } = await getGhAccounts(deps.gh.runGh);
+      return { ok: false, error: describeGhFailure({ stderr: diff.stderr, repo: m.repo, activeAccount: active }) };
+    }
     patch = diff.stdout;
     const head = await deps.gh.runGh(ghPrHeadArgs(m.number, m.repo));
     if (head.code === 0) { try { m.headSha = JSON.parse(head.stdout).headRefOid; } catch { /* keep old */ } }

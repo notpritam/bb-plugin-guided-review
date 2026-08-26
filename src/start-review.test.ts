@@ -1,11 +1,14 @@
 import { test, expect, vi } from "vitest";
 
+let viewFails = false;
+
 vi.mock("./gh", async (orig) => {
   const real = await orig<any>();
   return {
     ...real,
     runGh: vi.fn(async (args: string[]) => {
       if (args[1] === "view") {
+        if (viewFails) return { stdout: "", stderr: "gh: Not Found (HTTP 404)", code: 1 };
         return {
           stdout: JSON.stringify({
             number: 7,
@@ -24,6 +27,7 @@ vi.mock("./gh", async (orig) => {
       if (args[1] === "diff") {
         return { stdout: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-o\n+n\n", stderr: "", code: 0 };
       }
+      if (args[0] === "api" && args[1] === "user") return { stdout: "octocat\n", stderr: "", code: 0 };
       return { stdout: "", stderr: "", code: 0 };
     }),
     runGit: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
@@ -66,4 +70,25 @@ test("createPrReview rejects a non-PR-URL input", async () => {
 
   expect(res.ok).toBe(false);
   expect(res.targetKey).toBeUndefined();
+});
+
+test("createPrReview turns a raw gh 404 on `pr view` into an actionable wrong-account message", async () => {
+  viewFails = true;
+  try {
+    const { bb } = createFakePluginHost({ pluginId: "guided-review" });
+    const store = createStore(bb);
+
+    const res = await createPrReview(
+      { bb, store, gh },
+      { input: "https://github.com/acme/web/pull/7", projectId: "p1" },
+    );
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("octocat");
+    expect(res.error).toContain("acme/web");
+    expect(res.error?.toLowerCase()).toContain("switch");
+    expect(res.error).not.toContain("HTTP 404");
+  } finally {
+    viewFails = false;
+  }
 });

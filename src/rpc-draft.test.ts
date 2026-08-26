@@ -38,3 +38,20 @@ test("draft comment then submit builds a batched review", async () => {
   expect((res as any).ok).toBe(true);
   expect(submit).toHaveBeenCalled();
 });
+
+test("submitReview turns a raw gh 404 into an actionable wrong-account message", async () => {
+  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review" });
+  await plugin(bb);
+  const store = createStore(bb);
+  store.saveReview({ targetKey: "pr-2", kind: "pr", number: 2, repo: "acme/web", status: "ready", createdAt: 1 });
+  store.savePatch("pr-2", "diff --git a/a.ts b/a.ts\n");
+  await harness.behavior.callRpc("setVerdict", { targetKey: "pr-2", verdict: "COMMENT", body: "ok" });
+
+  submit.mockImplementationOnce(async () => ({ stdout: "", stderr: "gh: Not Found (HTTP 404)", code: 1 }));
+  const res = (await harness.behavior.callRpc("submitReview", { targetKey: "pr-2" })) as any;
+
+  expect(res.ok).toBe(false);
+  expect(res.error).toContain("acme/web");
+  expect(res.error.toLowerCase()).toContain("switch");
+  expect(res.error).not.toContain("HTTP 404");
+});
