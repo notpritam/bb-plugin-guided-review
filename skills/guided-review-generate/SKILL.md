@@ -15,6 +15,9 @@ You are producing a **guide**: a chaptered walkthrough of a diff. Follow this ex
    section a concept-level `title`, a 2–6 sentence markdown `overview`, and its `diffs` — each
    `{ file, summary }` where `file` is the exact repo-relative path and `summary` is a 1–2
    sentence semantic description of that file's change. Give each section a short kebab-case `id`.
+   Assign each section a `risk` of exactly `low`, `medium`, or `high` reflecting the blast radius
+   / likelihood of bugs in that chapter's changes (public API, auth, data, and concurrency changes
+   trend higher; docs/config trend lower).
 4. **Verify coverage.** Every changed file must appear in exactly one section's `diffs` OR in
    `unplacedFiles` — never twice, never omitted.
 5. **Submit** by calling `generate_review_guide` with `{ targetKey, guide }`. If it returns

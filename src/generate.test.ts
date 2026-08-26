@@ -18,7 +18,7 @@ async function host() {
   const store = createStore(h.bb); // same pluginId → same DB the factory's tools read
   store.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, status: "generating", createdAt: 1 });
   store.savePatch("pr-1", patch);
-  return h;
+  return { ...h, store };
 }
 
 test("read_review_patch returns stored patch text", async () => {
@@ -39,6 +39,69 @@ test("generate_review_guide rejects incomplete coverage then accepts a full guid
     guide: { title: "T", intent: "I", sections: [{ id: "s1", title: "S", overview: "o", diffs: [{ file: "a.ts", summary: "x" }] }], unplacedFiles: [], review: { gitRef: "x" } },
   });
   expect(good.isError).toBeFalsy();
+});
+
+test("generate_review_guide stamps the store's authoritative gitRef (and base) over whatever the guide submitted, and accepts a section risk", async () => {
+  const { harness, store } = await host();
+  store.saveReview({
+    targetKey: "pr-1",
+    kind: "pr",
+    number: 1,
+    status: "generating",
+    createdAt: 1,
+    gitRef: "main...feature-authoritative",
+    base: "main",
+  });
+
+  const good = await harness.behavior.callAgentTool("generate_review_guide", {
+    targetKey: "pr-1",
+    guide: {
+      title: "T",
+      intent: "I",
+      sections: [
+        {
+          id: "s1",
+          title: "S",
+          overview: "o",
+          risk: "high",
+          diffs: [{ file: "a.ts", summary: "x" }],
+        },
+      ],
+      unplacedFiles: [],
+      review: { gitRef: "wrong-or-stale-ref", base: "wrong-base" },
+    },
+  });
+  expect(good.isError).toBeFalsy();
+
+  const stored = store.getGuide("pr-1");
+  expect(stored?.review).toEqual({ gitRef: "main...feature-authoritative", base: "main" });
+  expect(stored?.sections[0].risk).toBe("high");
+});
+
+test("generate_review_guide stamps gitRef even when the submitted guide omitted review entirely", async () => {
+  const { harness, store } = await host();
+  store.saveReview({
+    targetKey: "pr-1",
+    kind: "pr",
+    number: 1,
+    status: "generating",
+    createdAt: 1,
+    gitRef: "main...feature-authoritative",
+  });
+
+  const good = await harness.behavior.callAgentTool("generate_review_guide", {
+    targetKey: "pr-1",
+    guide: {
+      title: "T",
+      intent: "I",
+      sections: [{ id: "s1", title: "S", overview: "o", diffs: [{ file: "a.ts", summary: "x" }] }],
+      unplacedFiles: [],
+    },
+  });
+  expect(good.isError).toBeFalsy();
+
+  const stored = store.getGuide("pr-1");
+  expect(stored?.review).toEqual({ gitRef: "main...feature-authoritative" });
 });
 
 function baseConfigContext(pluginId: string | null, threadTitle: string | null = null): PluginAgentConfigurationContext {
