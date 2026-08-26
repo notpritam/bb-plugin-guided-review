@@ -19,6 +19,12 @@ const commentShape = z
 export const rpcContract = defineRpcContract({
   ping: { input: z.null(), output: z.object({ ok: z.boolean() }) },
 
+  // Panel: start a review by pasting a GitHub PR URL
+  startReview: {
+    input: z.object({ input: z.string().min(1) }).strict(),
+    output: z.object({ ok: z.boolean(), error: z.string().optional(), targetKey: z.string().optional() }),
+  },
+
   // Task 10: read data plane
   listReviews: { input: z.null(), output: z.object({ reviews: z.array(z.any()) }) },
   getReview: { input: targetKey, output: z.object({ review: z.any().nullable() }) },

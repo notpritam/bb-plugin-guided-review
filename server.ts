@@ -10,6 +10,7 @@ import { createStore } from "./src/store";
 import { changedFiles } from "./src/patch";
 import { validateGuide, checkCoverage } from "./src/guide";
 import { runReviewCommand } from "./src/review-command";
+import { createPrReview } from "./src/start-review";
 import { runAssist } from "./src/assist";
 import {
   ghPrViewArgs,
@@ -38,6 +39,22 @@ export default async function plugin(bb: BbPluginApi) {
   bb.rpc.register(rpcContract, {
     ping() {
       return { ok: true };
+    },
+
+    // Panel: start a review by pasting a GitHub PR URL. The nav panel isn't
+    // project-scoped, so the frontend can't reliably supply a projectId —
+    // resolve one server-side (prefer the personal project, else the first).
+    async startReview({ input }) {
+      let projectId: string | undefined;
+      try {
+        const projects = await bb.sdk.projects.list({ includePersonal: true });
+        const personal = projects.find((p) => p.kind === "personal");
+        projectId = (personal ?? projects[0])?.id;
+      } catch {
+        return { ok: false, error: "Could not resolve a project to run generation." };
+      }
+      if (!projectId) return { ok: false, error: "No project available to run generation." };
+      return createPrReview({ bb, store, gh: { runGh, runGit } }, { input, projectId });
     },
 
     // Task 10: read data plane
