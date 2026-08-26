@@ -111,6 +111,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
               <Button
                 variant="ghost"
                 size="sm"
+                aria-pressed={view === "diff"}
                 className={cn("h-6 px-2 text-xs", view === "diff" && "bg-muted")}
                 onClick={() => setView("diff")}
               >
@@ -119,6 +120,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
               <Button
                 variant="ghost"
                 size="sm"
+                aria-pressed={view === "threads"}
                 className={cn("h-6 px-2 text-xs", view === "threads" && "bg-muted")}
                 onClick={() => setView("threads")}
               >

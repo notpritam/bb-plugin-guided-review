@@ -95,6 +95,7 @@ export const DraftTray = memo(function DraftTray({
       <div className="border-t border-border px-2 py-1.5">
         <button
           type="button"
+          aria-expanded={showComposer}
           className="text-xs font-medium text-muted-foreground hover:text-foreground"
           onClick={() => setShowComposer((s) => !s)}
         >
@@ -153,13 +154,14 @@ export const DraftTray = memo(function DraftTray({
         <div className="flex items-center gap-2">
           <button
             type="button"
+            aria-expanded={showNotes}
             className="text-xs font-medium text-muted-foreground hover:text-foreground"
             onClick={() => setShowNotes((s) => !s)}
           >
             {showNotes ? "− Review notes" : "＋ Review notes"}
           </button>
           {!showNotes && draft.body?.trim() && (
-            <span className="truncate text-xs text-muted-foreground">{draft.body}</span>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{draft.body}</span>
           )}
         </div>
         {showNotes && (
