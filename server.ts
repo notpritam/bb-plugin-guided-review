@@ -28,6 +28,7 @@ import {
 import { toGithubReviewPayload } from "./src/draft";
 import { parseChecks, parseReviewThreads } from "./src/threads";
 import { rerunReview } from "./src/rereview";
+import { getGhAccounts, switchGhAccount, checkRepoAccess } from "./src/gh-accounts";
 
 export { rpcContract } from "./src/rpc-contract";
 
@@ -164,6 +165,20 @@ export default async function plugin(bb: BbPluginApi) {
         return { answer: "This review has no associated project; re-run `bb review` inside a project." };
       }
       return runAssist(bb, store, { targetKey, chapterId, file, question, projectId: m.projectId });
+    },
+
+    // GitHub account indicator + switcher
+    async getGhAccounts() {
+      return getGhAccounts(runGh);
+    },
+    async switchGhAccount({ login }) {
+      const r = await switchGhAccount(runGh, login);
+      if (r.ok) bb.realtime.publish("gh-account", { active: r.active });
+      return r;
+    },
+    async checkRepoAccess({ targetKey }) {
+      const repo = store.getReview(targetKey)?.repo ?? null;
+      return checkRepoAccess(runGh, repo);
     },
   });
 

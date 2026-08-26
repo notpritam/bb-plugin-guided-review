@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { AccountBar } from "./AccountBar";
 
 export const ReviewList = memo(function ReviewList() {
   const rpc = useRpc<typeof rpcContract>();
@@ -38,6 +39,7 @@ export const ReviewList = memo(function ReviewList() {
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-2 p-4">
+      <AccountBar />
       <h2 className="text-lg font-semibold text-foreground">Guided Reviews</h2>
 
       <form

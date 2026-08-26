@@ -18,6 +18,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const [checks, setChecks] = useState<{ bucket: string; checks: any[] } | null>(null);
   const [activeId, setActiveId] = useState("");
   const [view, setView] = useState<"diff" | "threads">("diff");
+  const [repoAccess, setRepoAccess] = useState<{ accessible: boolean; repo: string | null; account: string | null } | null>(null);
 
   const load = useMemo(
     () => async () => {
@@ -47,6 +48,26 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     void load();
   });
 
+  const checkAccess = useMemo(
+    () => async () => {
+      try {
+        const r = await rpc.call("checkRepoAccess", { targetKey });
+        setRepoAccess(r);
+      } catch {
+        // Non-fatal: access banner just won't show.
+      }
+    },
+    [rpc, targetKey],
+  );
+
+  useEffect(() => {
+    if (guide) void checkAccess();
+  }, [guide, checkAccess]);
+  // Re-check after switching GitHub accounts so the banner clears/updates.
+  useRealtime("gh-account", () => {
+    void checkAccess();
+  });
+
   const activeFiles: string[] = useMemo(() => {
     const s = guide?.sections?.find((x: any) => x.id === activeId);
     return s ? s.diffs.map((d: any) => d.file) : [];
@@ -66,6 +87,12 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         <ReviewHeader review={review} checks={checks} />
         <p className="mt-1 text-sm text-foreground">{guide.intent}</p>
       </div>
+      {repoAccess && !repoAccess.accessible && (
+        <p className="border-b border-border px-3 py-1.5 text-xs text-destructive">
+          Active GitHub account {repoAccess.account ? `@${repoAccess.account}` : ""} can't access{" "}
+          {repoAccess.repo ?? "this repo"} — switch account in the review list.
+        </p>
+      )}
       {review?.status === "error" && (
         <p className="border-b border-border px-3 py-1.5 text-xs text-destructive">
           Re-review failed — showing the previous guide. Try again.

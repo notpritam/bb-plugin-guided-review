@@ -91,4 +91,21 @@ export const rpcContract = defineRpcContract({
       .strict(),
     output: z.object({ answer: z.string() }),
   },
+
+  // GitHub account indicator + switcher
+  getGhAccounts: {
+    input: z.null(),
+    output: z.object({
+      active: z.string().nullable(),
+      accounts: z.array(z.object({ login: z.string(), active: z.boolean() })),
+    }),
+  },
+  switchGhAccount: {
+    input: z.object({ login: z.string().min(1) }).strict(),
+    output: z.object({ ok: z.boolean(), active: z.string().nullable(), error: z.string().optional() }),
+  },
+  checkRepoAccess: {
+    input: z.object({ targetKey: z.string() }).strict(),
+    output: z.object({ accessible: z.boolean(), repo: z.string().nullable(), account: z.string().nullable() }),
+  },
 });
