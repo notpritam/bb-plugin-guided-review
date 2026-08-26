@@ -10,7 +10,7 @@
     "name": "Guided Review",
     "description": "Turn a GitHub PR or local git ref into an agent-authored chaptered review, and submit it back to GitHub.",
     "branding": {
-      "icon": "Zap"
+      "icon": "./assets/icon.svg"
     },
     "server": "./server.ts",
     "app": "./app.tsx"
