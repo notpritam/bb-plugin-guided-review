@@ -47,17 +47,17 @@ export const RereviewBanner = memo(function RereviewBanner({ targetKey }: { targ
     }
   }
 
+  // Idle: a bare small/ghost button tucked under the header — no band, no
+  // border. Stale: a slim one-line strip with the nudge text alongside it.
   return (
     <div
       className={cn(
-        "flex items-center gap-2 border-b border-border px-3 py-2",
-        hasNewCommits ? "justify-between bg-muted" : "justify-end",
+        "flex items-center gap-2 px-3 text-xs",
+        hasNewCommits ? "justify-between border-t border-border bg-muted py-1.5" : "justify-end py-1",
       )}
     >
-      {hasNewCommits && (
-        <p className="text-xs text-foreground">New commits on this PR since the guide was built.</p>
-      )}
-      <Button variant="outline" size="sm" disabled={busy} onClick={reReview}>
+      {hasNewCommits && <p className="text-foreground">New commits on this PR since the guide was built.</p>}
+      <Button variant="ghost" size="sm" className="h-6 px-2" disabled={busy} onClick={reReview}>
         {busy ? "Re-reviewing…" : "Re-review"}
       </Button>
     </div>

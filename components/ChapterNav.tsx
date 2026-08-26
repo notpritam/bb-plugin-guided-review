@@ -25,33 +25,38 @@ export const ChapterNav = memo(function ChapterNav({
   onSelect: (id: string) => void;
 }) {
   return (
-    <nav className="space-y-1">
-      {sections.map((s) => (
-        <button
-          key={s.id}
-          onClick={() => onSelect(s.id)}
-          className={cn(
-            "w-full rounded-md border border-border p-2 text-left",
-            s.id === activeId ? "bg-muted" : "bg-card hover:bg-muted",
-          )}
-        >
-          <div className="flex items-center gap-1.5">
-            <div className="text-sm font-medium text-foreground">{s.title}</div>
-            {s.risk && (
-              <span
-                className={cn(
-                  "shrink-0 rounded-full border px-1.5 py-0 text-[10px] uppercase leading-4",
-                  RISK_STYLES[s.risk] ?? RISK_STYLES.low,
-                )}
-              >
-                {s.risk}
-              </span>
+    <nav className="space-y-0.5">
+      {sections.map((s) => {
+        const active = s.id === activeId;
+        return (
+          <button
+            key={s.id}
+            onClick={() => onSelect(s.id)}
+            className={cn(
+              "w-full rounded-md border-l-2 border-transparent px-2 py-1.5 text-left",
+              active ? "border-l-foreground/40 bg-muted" : "hover:bg-muted/50",
             )}
-          </div>
-          <div className="line-clamp-2 text-xs text-muted-foreground">{s.overview}</div>
-          <div className="mt-1 text-[10px] text-muted-foreground">{s.diffs.length} file(s)</div>
-        </button>
-      ))}
+          >
+            <div className="flex items-center gap-1.5">
+              <div className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{s.title}</div>
+              {s.risk && (
+                <span
+                  className={cn(
+                    "shrink-0 rounded-full border px-1.5 py-0 text-[10px] uppercase leading-4",
+                    RISK_STYLES[s.risk] ?? RISK_STYLES.low,
+                  )}
+                >
+                  {s.risk}
+                </span>
+              )}
+              <span className="shrink-0 text-[10px] text-muted-foreground">{s.diffs.length} file(s)</span>
+            </div>
+            {active && s.overview && (
+              <div className="mt-1 line-clamp-4 text-xs text-muted-foreground">{s.overview}</div>
+            )}
+          </button>
+        );
+      })}
     </nav>
   );
 });

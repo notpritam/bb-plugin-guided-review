@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { useRpc, useRealtime } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
+import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { ReviewHeader } from "./ReviewHeader";
 import { ChapterNav } from "./ChapterNav";
@@ -83,34 +84,47 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border p-3">
-        <ReviewHeader review={review} checks={checks} />
-        <p className="mt-1 text-sm text-foreground">{guide.intent}</p>
+      <div className="border-b border-border">
+        <div className="p-3">
+          <ReviewHeader review={review} checks={checks} intent={guide.intent} />
+        </div>
+        <RereviewBanner targetKey={targetKey} />
       </div>
       {repoAccess && !repoAccess.accessible && (
-        <p className="border-b border-border px-3 py-1.5 text-xs text-destructive">
+        <p className="border-b border-border px-3 py-1 text-xs text-destructive">
           Active GitHub account {repoAccess.account ? `@${repoAccess.account}` : ""} can't access{" "}
           {repoAccess.repo ?? "this repo"} — switch account in the review list.
         </p>
       )}
       {review?.status === "error" && (
-        <p className="border-b border-border px-3 py-1.5 text-xs text-destructive">
+        <p className="border-b border-border px-3 py-1 text-xs text-destructive">
           Re-review failed — showing the previous guide. Try again.
         </p>
       )}
-      <RereviewBanner targetKey={targetKey} />
       <div className="flex min-h-0 flex-1">
-        <aside className="w-72 shrink-0 overflow-y-auto border-r border-border p-3">
+        <aside className="w-72 shrink-0 overflow-y-auto border-r border-border p-2">
           <ChapterNav sections={guide.sections} activeId={activeId} onSelect={setActiveId} />
         </aside>
         <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-          <div className="flex items-center gap-1 border-b border-border px-3 py-1.5">
-            <Button variant={view === "diff" ? "secondary" : "ghost"} size="sm" onClick={() => setView("diff")}>
-              Diff
-            </Button>
-            <Button variant={view === "threads" ? "secondary" : "ghost"} size="sm" onClick={() => setView("threads")}>
-              Threads
-            </Button>
+          <div className="flex items-center gap-0.5 border-b border-border px-3 py-1.5">
+            <div className="inline-flex items-center gap-0.5 rounded-md border border-border p-0.5">
+              <Button
+                variant="ghost"
+                size="sm"
+                className={cn("h-6 px-2 text-xs", view === "diff" && "bg-muted")}
+                onClick={() => setView("diff")}
+              >
+                Diff
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={cn("h-6 px-2 text-xs", view === "threads" && "bg-muted")}
+                onClick={() => setView("threads")}
+              >
+                Threads
+              </Button>
+            </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             {view === "diff" ? (

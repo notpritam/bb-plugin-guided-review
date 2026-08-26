@@ -22,6 +22,8 @@ export const DraftTray = memo(function DraftTray({
   const [file, setFile] = useState(activeFiles[0] ?? "");
   const [line, setLine] = useState("1");
   const [body, setBody] = useState("");
+  const [showComposer, setShowComposer] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
 
   useEffect(() => {
     void rpc.call("getDraft", { targetKey }).then((r) => setDraft(r.draft));
@@ -64,14 +66,17 @@ export const DraftTray = memo(function DraftTray({
     }
   }
 
+  const pendingCount = draft.comments.length;
+
   return (
-    <div className="border-t border-border p-3 space-y-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">{draft.comments.length} pending comment(s)</span>
+    <div className="border-t border-border">
+      {/* Persistent slim bar: always visible, one row. */}
+      <div className="flex items-center gap-2 p-2">
+        {pendingCount > 0 && <span className="text-xs text-muted-foreground">{pendingCount} pending</span>}
         <div className="ml-auto flex items-center gap-2">
           <AssistPopover targetKey={targetKey} chapterId={activeChapterId} file={file} />
           <Select value={draft.verdict} onValueChange={(v) => setDraft({ ...draft, verdict: v })}>
-            <SelectTrigger className="w-40">
+            <SelectTrigger className="h-8 w-40 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -86,40 +91,86 @@ export const DraftTray = memo(function DraftTray({
         </div>
       </div>
 
-      <ul className="max-h-24 overflow-y-auto text-xs">
-        {draft.comments.map((c: any, i: number) => (
-          <li key={i} className="flex items-center gap-2 text-foreground">
-            <span className="text-muted-foreground">
-              {c.file}:{c.line}
-            </span>
-            <span className="truncate">{c.body}</span>
-            <button className="ml-auto text-destructive" onClick={() => removeComment(i)}>
-              remove
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      <div className="flex items-end gap-2">
-        <Input value={file} onChange={(e) => setFile(e.target.value)} placeholder="file" className="w-64" />
-        <Input
-          type="number"
-          value={line}
-          onChange={(e) => setLine(e.target.value)}
-          placeholder="line"
-          className="w-20"
-        />
-        <Textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="comment" className="flex-1" />
-        <Button size="sm" disabled={!file || !body || !lineValid} onClick={addComment}>
-          Add
-        </Button>
+      {/* Add-comment disclosure: collapsed by default. */}
+      <div className="border-t border-border px-2 py-1.5">
+        <button
+          type="button"
+          className="text-xs font-medium text-muted-foreground hover:text-foreground"
+          onClick={() => setShowComposer((s) => !s)}
+        >
+          {showComposer ? "− Add comment" : "＋ Add comment"}
+        </button>
+        {showComposer && (
+          <div className="mt-2 space-y-2">
+            {pendingCount > 0 && (
+              <ul className="max-h-24 space-y-1 overflow-y-auto text-xs">
+                {draft.comments.map((c: any, i: number) => (
+                  <li
+                    key={i}
+                    className="flex items-center gap-2 rounded border border-border bg-card px-2 py-1 text-foreground"
+                  >
+                    <span className="shrink-0 text-muted-foreground">
+                      {c.file}:{c.line}
+                    </span>
+                    <span className="truncate">{c.body}</span>
+                    <button
+                      type="button"
+                      className="ml-auto shrink-0 text-destructive"
+                      aria-label="Remove comment"
+                      onClick={() => removeComment(i)}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex items-end gap-2">
+              <Input value={file} onChange={(e) => setFile(e.target.value)} placeholder="file" className="w-56" />
+              <Input
+                type="number"
+                value={line}
+                onChange={(e) => setLine(e.target.value)}
+                placeholder="line"
+                className="w-16"
+              />
+              <Textarea
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                placeholder="comment"
+                className="flex-1"
+              />
+              <Button size="sm" disabled={!file || !body || !lineValid} onClick={addComment}>
+                Add
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <Textarea
-        value={draft.body}
-        onChange={(e) => setDraft({ ...draft, body: e.target.value })}
-        placeholder="Review summary (posted as the review body)"
-      />
+      {/* Review notes disclosure: collapsed by default. */}
+      <div className="border-t border-border px-2 py-1.5">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="text-xs font-medium text-muted-foreground hover:text-foreground"
+            onClick={() => setShowNotes((s) => !s)}
+          >
+            {showNotes ? "− Review notes" : "＋ Review notes"}
+          </button>
+          {!showNotes && draft.body?.trim() && (
+            <span className="truncate text-xs text-muted-foreground">{draft.body}</span>
+          )}
+        </div>
+        {showNotes && (
+          <Textarea
+            value={draft.body}
+            onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+            placeholder="Review summary (posted as the review body)"
+            className="mt-2"
+          />
+        )}
+      </div>
     </div>
   );
 });
