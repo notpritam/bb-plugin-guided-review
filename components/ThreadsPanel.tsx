@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
@@ -9,22 +9,32 @@ export const ThreadsPanel = memo(function ThreadsPanel({ targetKey }: { targetKe
   const rpc = useRpc<typeof rpcContract>();
   const [threads, setThreads] = useState<any[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  const cancelledRef = useRef(false);
 
   async function load() {
     try {
       const { threads } = await rpc.call("getReviewThreads", { targetKey });
+      if (cancelledRef.current) return;
       setThreads(threads);
+      setLoadError(false);
     } catch (err) {
+      if (cancelledRef.current) return;
+      setLoadError(true);
       toast.error(err instanceof Error ? err.message : "Failed to load review threads");
     } finally {
-      setLoaded(true);
+      if (!cancelledRef.current) setLoaded(true);
     }
   }
 
   useEffect(() => {
+    cancelledRef.current = false;
     void load();
+    return () => {
+      cancelledRef.current = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rpc, targetKey]);
 
@@ -63,6 +73,10 @@ export const ThreadsPanel = memo(function ThreadsPanel({ targetKey }: { targetKe
     } finally {
       setBusyId(null);
     }
+  }
+
+  if (loaded && loadError) {
+    return <p className="p-4 text-sm text-destructive">Couldn't load review threads.</p>;
   }
 
   if (loaded && threads.length === 0) {

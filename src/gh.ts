@@ -16,10 +16,6 @@ export function ghRepoViewArgs(): string[] {
 export function ghPrCommentsArgs(repo: string, number: number): string[] {
   return ["api", `repos/${repo}/pulls/${number}/comments`];
 }
-export function ghPrChecksArgs(number: number, repo?: string): string[] {
-  const a = ["pr", "checks", String(number)];
-  return repo ? [...a, "-R", repo] : a;
-}
 export function ghSubmitReviewArgs(repo: string, number: number): string[] {
   return ["api", "-X", "POST", `repos/${repo}/pulls/${number}/reviews`, "--input", "-"];
 }
@@ -42,7 +38,7 @@ const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
       comments(first:100){ nodes{ id databaseId author{login} body } } } } } } }`;
 export function ghReviewThreadsArgs(owner: string, repo: string, number: number): string[] {
   return ["api", "graphql", "-f", `query=${REVIEW_THREADS_QUERY}`,
-    "-F", `owner=${owner}`, "-F", `repo=${repo}`, "-F", `number=${number}`];
+    "-f", `owner=${owner}`, "-f", `repo=${repo}`, "-F", `number=${number}`];
 }
 export function ghReplyThreadArgs(repo: string, number: number, inReplyToCommentId: number): string[] {
   return ["api", "-X", "POST", `repos/${repo}/pulls/${number}/comments/${inReplyToCommentId}/replies`, "--input", "-"];
@@ -50,12 +46,12 @@ export function ghReplyThreadArgs(repo: string, number: number, inReplyToComment
 export function ghResolveThreadArgs(threadId: string): string[] {
   return ["api", "graphql", "-f",
     `query=mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}`,
-    "-F", `id=${threadId}`];
+    "-f", `id=${threadId}`];
 }
 export function ghUnresolveThreadArgs(threadId: string): string[] {
   return ["api", "graphql", "-f",
     `query=mutation($id:ID!){unresolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}`,
-    "-F", `id=${threadId}`];
+    "-f", `id=${threadId}`];
 }
 
 interface RunOpts { cwd?: string; stdin?: string }

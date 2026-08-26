@@ -7,7 +7,10 @@ export function parseChecks(raw: string): ChecksSummary {
   if (!Array.isArray(items) || items.length === 0) return { bucket: "none", checks: [] };
   const checks: CheckItem[] = items.map((c) => ({ name: c.name, bucket: c.bucket, state: c.state, link: c.link }));
   const buckets = new Set(checks.map((c) => c.bucket));
-  const bucket = buckets.has("fail") ? "fail" : buckets.has("pending") ? "pending" : "pass";
+  const bucket = buckets.has("fail") ? "fail"
+    : buckets.has("pending") ? "pending"
+    : buckets.has("pass") ? "pass"
+    : "none";
   return { bucket, checks };
 }
 

@@ -38,6 +38,14 @@ test("parseChecks with a pending bucket and no fail returns pending", () => {
   expect(parseChecks(raw).bucket).toBe("pending");
 });
 
+test("parseChecks with only skipping/cancel buckets returns none, not pass", () => {
+  const raw = JSON.stringify([
+    { name: "optional-lint", state: "SKIPPED", bucket: "skipping", link: "https://x/1" },
+    { name: "manual-approval", state: "CANCELLED", bucket: "cancel", link: "https://x/2" },
+  ]);
+  expect(parseChecks(raw).bucket).toBe("none");
+});
+
 test("parseReviewThreads flattens a realistic graphql response", () => {
   const raw = JSON.stringify({
     data: {

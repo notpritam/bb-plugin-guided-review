@@ -81,3 +81,21 @@ test("shows an empty state when there are no threads", async () => {
 
   await slot.findByText("No review threads yet.");
 });
+
+test("shows a distinct error state when loading threads fails", async () => {
+  const { ThreadsPanel } = await import("./ThreadsPanel");
+  const slot = renderSlot(
+    { component: ThreadsPanel },
+    { targetKey: "pr-1" },
+    {
+      rpc: {
+        getReviewThreads: () => {
+          throw new Error("boom");
+        },
+      } as any,
+    },
+  );
+
+  await slot.findByText("Couldn't load review threads.");
+  expect(slot.queryByText("No review threads yet.")).toBeNull();
+});

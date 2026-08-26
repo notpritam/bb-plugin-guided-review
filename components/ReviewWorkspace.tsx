@@ -66,6 +66,11 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         <ReviewHeader review={review} checks={checks} />
         <p className="mt-1 text-sm text-foreground">{guide.intent}</p>
       </div>
+      {review?.status === "error" && (
+        <p className="border-b border-border px-3 py-1.5 text-xs text-destructive">
+          Re-review failed — showing the previous guide. Try again.
+        </p>
+      )}
       <RereviewBanner targetKey={targetKey} />
       <div className="flex min-h-0 flex-1">
         <aside className="w-72 shrink-0 overflow-y-auto border-r border-border p-3">
