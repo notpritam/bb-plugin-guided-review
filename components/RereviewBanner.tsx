@@ -1,5 +1,5 @@
-import { memo, useEffect, useState } from "react";
-import { useRpc } from "@get-bb/plugin-sdk/app";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { useRpc, useRealtime } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import { cn } from "../lib/utils";
@@ -9,21 +9,30 @@ export const RereviewBanner = memo(function RereviewBanner({ targetKey }: { targ
   const rpc = useRpc<typeof rpcContract>();
   const [hasNewCommits, setHasNewCommits] = useState(false);
   const [busy, setBusy] = useState(false);
+  const cancelledRef = useRef(false);
+
+  const recheck = useCallback(async () => {
+    try {
+      const r = await rpc.call("checkForUpdates", { targetKey });
+      if (!cancelledRef.current) setHasNewCommits(r.hasNewCommits);
+    } catch {
+      // Non-fatal: staleness check just won't show a banner.
+    }
+  }, [rpc, targetKey]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await rpc.call("checkForUpdates", { targetKey });
-        if (!cancelled) setHasNewCommits(r.hasNewCommits);
-      } catch {
-        // Non-fatal: staleness check just won't show a banner.
-      }
-    })();
+    cancelledRef.current = false;
+    void recheck();
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
     };
-  }, [rpc, targetKey]);
+  }, [recheck]);
+
+  // Re-check on every review update (e.g. after Re-review completes and the
+  // guide is rebuilt against the new head) so the banner doesn't stay stale.
+  useRealtime(`review:${targetKey}`, () => {
+    void recheck();
+  });
 
   async function reReview() {
     setBusy(true);
