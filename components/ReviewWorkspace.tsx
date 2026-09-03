@@ -3,6 +3,7 @@ import { useRpc, useRealtime } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import { cn } from "../lib/utils";
+import { getReviewState, patchReviewState, setLastReview } from "../lib/panel-state";
 import { Button } from "./ui/button";
 import { Icon } from "./ui/icon";
 import { ReviewHeader } from "./ReviewHeader";
@@ -13,25 +14,41 @@ import { RereviewBanner } from "./RereviewBanner";
 import { ThreadsPanel } from "./ThreadsPanel";
 import { AgentDock, type DockInjection } from "./AgentDock";
 
+const SIDEBAR_MIN = 200;
+const SIDEBAR_MAX = 560;
+
 export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { targetKey: string }) {
   const rpc = useRpc<typeof rpcContract>();
+  const persisted = useMemo(() => getReviewState(targetKey), [targetKey]);
+
   const [review, setReview] = useState<any>(null);
   const [guide, setGuide] = useState<any>(null);
   const [patch, setPatch] = useState("");
   const [checks, setChecks] = useState<{ bucket: string; checks: any[] } | null>(null);
   const [activeId, setActiveId] = useState("");
-  const [view, setView] = useState<"diff" | "threads">("diff");
+  const [view, setView] = useState<"diff" | "threads">(persisted.view ?? "diff");
   const [repoAccess, setRepoAccess] = useState<{ accessible: boolean; repo: string | null; account: string | null } | null>(null);
   const [views, setViews] = useState<Map<string, FileViewFlags>>(new Map());
   const [injection, setInjection] = useState<DockInjection | undefined>();
   const [currentFile, setCurrentFile] = useState<string | undefined>();
   const [sel, setSel] = useState<{ x: number; y: number; file: string; code: string } | null>(null);
 
+  // Screen utilization: resizable/collapsible sidebar, focus mode, fullscreen.
+  const [sidebarWidth, setSidebarWidth] = useState(persisted.sidebarWidth ?? 288);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [focus, setFocus] = useState(persisted.focus ?? false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
   const fileEls = useRef<Map<string, HTMLElement>>(new Map());
   const pendingScroll = useRef<string | null>(null);
   const scrollBox = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const didRestoreScroll = useRef(false);
   const reducedMotion =
     typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+  useEffect(() => setLastReview(targetKey), [targetKey]);
+  useEffect(() => patchReviewState(targetKey, { activeId, view, sidebarWidth, focus }), [targetKey, activeId, view, sidebarWidth, focus]);
 
   const loadViews = useCallback(async () => {
     try {
@@ -55,7 +72,11 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         setGuide(guide);
         setPatch(patch);
         setChecks(checksRes);
-        if (guide?.sections?.[0]) setActiveId((prev) => prev || guide.sections[0].id);
+        if (guide?.sections?.length) {
+          const saved = getReviewState(targetKey).activeId;
+          const exists = saved && guide.sections.some((s: any) => s.id === saved);
+          setActiveId((prev) => prev || (exists ? saved! : guide.sections[0].id));
+        }
         void loadViews();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to load review");
@@ -90,6 +111,18 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     void checkAccess();
   });
 
+  // Track browser fullscreen state so the toggle icon/label stays correct.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement === rootRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    else void rootRef.current?.requestFullscreen().catch(() => {});
+  }, []);
+
   const activeFiles: string[] = useMemo(() => {
     const s = guide?.sections?.find((x: any) => x.id === activeId);
     return s ? s.diffs.map((d: any) => d.file) : [];
@@ -98,6 +131,14 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   useEffect(() => {
     setCurrentFile(activeFiles[0]);
   }, [activeFiles]);
+
+  // Restore the saved scroll position once the diff has content to scroll.
+  useEffect(() => {
+    if (didRestoreScroll.current || !patch || view !== "diff" || !scrollBox.current) return;
+    const top = getReviewState(targetKey).scrollTop;
+    if (top) scrollBox.current.scrollTop = top;
+    didRestoreScroll.current = true;
+  }, [patch, view, targetKey]);
 
   const toggleViewed = useCallback(
     (file: string, viewed: boolean) => {
@@ -145,7 +186,6 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     [activeId, scrollToFile],
   );
 
-  // After a chapter switch requested by a file click, scroll once its files render.
   useEffect(() => {
     if (pendingScroll.current && activeFiles.includes(pendingScroll.current)) {
       const f = pendingScroll.current;
@@ -154,7 +194,8 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     }
   }, [activeFiles, scrollToFile]);
 
-  // Track the file nearest the top of the scroll viewport as the agent's context.
+  // Persist scroll (debounced) and track the file nearest the viewport top.
+  const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onScroll = useCallback(() => {
     const box = scrollBox.current;
     if (!box) return;
@@ -169,9 +210,11 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
       }
     }
     if (best) setCurrentFile(best);
-  }, []);
+    if (scrollSaveTimer.current) clearTimeout(scrollSaveTimer.current);
+    const value = box.scrollTop;
+    scrollSaveTimer.current = setTimeout(() => patchReviewState(targetKey, { scrollTop: value }), 200);
+  }, [targetKey]);
 
-  // Highlight-to-ask: capture a selection inside a file card.
   const onMouseUp = useCallback(() => {
     const s = window.getSelection();
     const text = s?.toString() ?? "";
@@ -198,6 +241,23 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     window.getSelection()?.removeAllRanges();
   }
 
+  // Sidebar resize drag.
+  function startSidebarResize(e: React.PointerEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    function onMove(ev: PointerEvent) {
+      const w = Math.min(Math.max(startW + (ev.clientX - startX), SIDEBAR_MIN), SIDEBAR_MAX);
+      setSidebarWidth(w);
+    }
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   if (!guide) {
     return (
       <div className="p-6 text-sm text-muted-foreground">
@@ -209,13 +269,24 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const viewedCount = activeFiles.filter((f) => views.get(f)?.viewed).length;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="border-b border-border">
-        <div className="p-3">
-          <ReviewHeader review={review} checks={checks} intent={guide.intent} />
+    <div ref={rootRef} className="flex h-full flex-col bg-background">
+      {/* Header — full when reviewing normally, slim in focus mode. */}
+      {focus ? (
+        <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+          <Icon name="GitPullRequest" className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+            {review?.title ?? guide.title ?? targetKey}
+          </span>
+          <RereviewBanner targetKey={targetKey} />
         </div>
-        <RereviewBanner targetKey={targetKey} />
-      </div>
+      ) : (
+        <div className="border-b border-border">
+          <div className="p-3">
+            <ReviewHeader review={review} checks={checks} intent={guide.intent} />
+          </div>
+          <RereviewBanner targetKey={targetKey} />
+        </div>
+      )}
       {repoAccess && !repoAccess.accessible && (
         <p className="border-b border-border px-3 py-1 text-xs text-destructive">
           Active GitHub account {repoAccess.account ? `@${repoAccess.account}` : ""} can't access{" "}
@@ -228,17 +299,41 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         </p>
       )}
       <div className="flex min-h-0 flex-1">
-        <aside className="w-72 shrink-0 overflow-y-auto border-r border-border p-2">
-          <ChapterNav
-            sections={guide.sections}
-            activeId={activeId}
-            onSelect={setActiveId}
-            views={views}
-            onSelectFile={onSelectFile}
-          />
-        </aside>
+        {!sidebarCollapsed && (
+          <>
+            <aside
+              className="shrink-0 overflow-y-auto border-r border-border p-2"
+              style={{ width: sidebarWidth }}
+            >
+              <ChapterNav
+                sections={guide.sections}
+                activeId={activeId}
+                onSelect={setActiveId}
+                views={views}
+                onSelectFile={onSelectFile}
+              />
+            </aside>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize sidebar"
+              onPointerDown={startSidebarResize}
+              className="w-1 shrink-0 cursor-col-resize bg-border/40 hover:bg-foreground/30"
+            />
+          </>
+        )}
         <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
           <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+              aria-pressed={sidebarCollapsed}
+              className="h-6 px-1.5"
+              onClick={() => setSidebarCollapsed((c) => !c)}
+            >
+              <Icon name="AlignLeft" className="size-4" aria-hidden />
+            </Button>
             <div className="inline-flex items-center gap-0.5 rounded-md border border-border p-0.5">
               <Button
                 variant="ghost"
@@ -259,23 +354,48 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 Threads
               </Button>
             </div>
-            {view === "diff" && activeFiles.length > 0 && (
-              <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-                <span>
-                  {viewedCount} / {activeFiles.length} viewed
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 px-2 text-xs"
-                  disabled={viewedCount === activeFiles.length}
-                  onClick={markAllViewed}
-                >
-                  <Icon name="Check" className="size-3.5" aria-hidden />
-                  Mark all
-                </Button>
-              </div>
-            )}
+            <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+              {view === "diff" && activeFiles.length > 0 && (
+                <>
+                  <span>
+                    {viewedCount} / {activeFiles.length} viewed
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    disabled={viewedCount === activeFiles.length}
+                    onClick={markAllViewed}
+                  >
+                    <Icon name="Check" className="size-3.5" aria-hidden />
+                    Mark all
+                  </Button>
+                  <span className="h-4 w-px bg-border" />
+                </>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Focus mode"
+                aria-pressed={focus}
+                className={cn("h-6 px-2 text-xs", focus && "bg-muted")}
+                onClick={() => setFocus((f) => !f)}
+              >
+                <Icon name="Minimize2" className="size-3.5" aria-hidden />
+                Focus
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+                aria-pressed={isFullscreen}
+                className="h-6 px-2 text-xs"
+                onClick={toggleFullscreen}
+              >
+                <Icon name={isFullscreen ? "Minimize2" : "Maximize2"} className="size-3.5" aria-hidden />
+                {isFullscreen ? "Exit" : "Full screen"}
+              </Button>
+            </div>
           </div>
           <div ref={scrollBox} onScroll={onScroll} onMouseUp={onMouseUp} className="min-h-0 flex-1 overflow-y-auto p-4">
             {view === "diff" ? (
@@ -306,12 +426,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         </button>
       )}
 
-      <AgentDock
-        targetKey={targetKey}
-        currentFile={currentFile}
-        currentChapterId={activeId}
-        injection={injection}
-      />
+      <AgentDock targetKey={targetKey} currentFile={currentFile} currentChapterId={activeId} injection={injection} />
     </div>
   );
 });
