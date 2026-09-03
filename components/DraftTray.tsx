@@ -6,7 +6,6 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { AssistPopover } from "./AssistPopover";
 
 export const DraftTray = memo(function DraftTray({
   targetKey,
@@ -74,7 +73,6 @@ export const DraftTray = memo(function DraftTray({
       <div className="flex items-center gap-2 p-2">
         {pendingCount > 0 && <span className="text-xs text-muted-foreground">{pendingCount} pending</span>}
         <div className="ml-auto flex items-center gap-2">
-          <AssistPopover targetKey={targetKey} chapterId={activeChapterId} file={file} />
           <Select value={draft.verdict} onValueChange={(v) => setDraft({ ...draft, verdict: v })}>
             <SelectTrigger className="h-8 w-40 text-xs">
               <SelectValue />

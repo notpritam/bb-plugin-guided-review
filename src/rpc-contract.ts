@@ -6,6 +6,16 @@ import { z } from "zod";
 // of this contract only; the backend module never enters the frontend bundle.
 const targetKey = z.object({ targetKey: z.string() }).strict();
 
+const agentContext = z
+  .object({
+    file: z.string().optional(),
+    startLine: z.number().int().optional(),
+    endLine: z.number().int().optional(),
+    code: z.string().optional(),
+    chapterId: z.string().optional(),
+  })
+  .strict();
+
 const commentShape = z
   .object({
     file: z.string(),
@@ -79,18 +89,31 @@ export const rpcContract = defineRpcContract({
   },
   submitReview: { input: targetKey, output: z.object({ ok: z.boolean(), error: z.string().optional() }) },
 
-  // Task 12: inline agent-assist
-  assist: {
+  // Feature 1: per-file "Viewed" state
+  getFileViews: {
+    input: targetKey,
+    output: z.object({
+      views: z.array(z.object({ file: z.string(), viewed: z.boolean(), stale: z.boolean() })),
+    }),
+  },
+  setFileViewed: {
+    input: z.object({ targetKey: z.string(), file: z.string(), viewed: z.boolean() }).strict(),
+    output: z.object({ ok: z.boolean() }),
+  },
+
+  // Feature 3: floating review agent (persistent thread + in-panel chat log)
+  getAgentMessages: { input: targetKey, output: z.object({ messages: z.array(z.any()) }) },
+  askAgent: {
     input: z
       .object({
         targetKey: z.string(),
-        chapterId: z.string().optional(),
-        file: z.string().optional(),
-        question: z.string().min(1),
+        message: z.string().min(1),
+        context: agentContext.optional(),
       })
       .strict(),
     output: z.object({ answer: z.string() }),
   },
+  openAgentThread: { input: targetKey, output: z.object({ threadId: z.string() }) },
 
   // GitHub account indicator + switcher
   getGhAccounts: {

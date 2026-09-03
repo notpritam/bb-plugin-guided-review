@@ -11,7 +11,8 @@ import { changedFiles } from "./src/patch";
 import { validateGuide, checkCoverage } from "./src/guide";
 import { runReviewCommand } from "./src/review-command";
 import { createPrReview } from "./src/start-review";
-import { runAssist } from "./src/assist";
+import { runAgentTurn, openAgentThread } from "./src/agent";
+import { computeFileViewState, hashForFile } from "./src/file-views";
 import {
   ghPrViewArgs,
   ghPrCommentsArgs,
@@ -158,13 +159,41 @@ export default async function plugin(bb: BbPluginApi) {
       return { ok: true };
     },
 
-    // Task 12: inline agent-assist
-    async assist({ targetKey, chapterId, file, question }) {
+    // Feature 1: per-file "Viewed" state (viewed/stale computed against the patch)
+    getFileViews({ targetKey }) {
+      const total = store.readPatch(targetKey, 0, 0).total;
+      const patch = store.readPatch(targetKey, 0, total).text;
+      return { views: computeFileViewState(store.getFileViews(targetKey), patch) };
+    },
+    setFileViewed({ targetKey, file, viewed }) {
+      if (!viewed) {
+        store.unsetFileViewed(targetKey, file);
+        return { ok: true };
+      }
+      const total = store.readPatch(targetKey, 0, 0).total;
+      const hash = hashForFile(store.readPatch(targetKey, 0, total).text, file);
+      if (!hash) return { ok: false };
+      store.setFileViewed(targetKey, file, hash);
+      return { ok: true };
+    },
+
+    // Feature 3: floating review agent
+    getAgentMessages({ targetKey }) {
+      return { messages: store.listAgentMessages(targetKey) };
+    },
+    async askAgent({ targetKey, message, context }) {
       const m = store.getReview(targetKey);
       if (!m?.projectId) {
         return { answer: "This review has no associated project; re-run `bb review` inside a project." };
       }
-      return runAssist(bb, store, { targetKey, chapterId, file, question, projectId: m.projectId });
+      const res = await runAgentTurn(bb, store, { targetKey, message, context, projectId: m.projectId });
+      bb.realtime.publish(`agent:${targetKey}`, { ts: Date.now() });
+      return res;
+    },
+    async openAgentThread({ targetKey }) {
+      const m = store.getReview(targetKey);
+      if (!m?.projectId) throw new Error("This review has no associated project.");
+      return openAgentThread(bb, store, { targetKey, projectId: m.projectId });
     },
 
     // GitHub account indicator + switcher
@@ -219,9 +248,11 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   // Only expose these tools to THIS plugin's own spawned generation thread.
-  // Both the generation thread and the assist Q&A thread are spawned by this
+  // Both the generation thread and the review-agent thread are spawned by this
   // plugin (origin.pluginId matches for both), so the origin check alone is
-  // not enough — gate on the generation thread's distinctive title too.
+  // not enough — gate on the generation thread's distinctive title too. The
+  // review-agent thread ("Review agent: …") answers from inlined context and
+  // intentionally gets no tools.
   bb.agents.configure((context) => {
     const isGenerationThread =
       context.origin?.pluginId === bb.pluginId && (context.thread?.title ?? "").startsWith("Generate guide:");
