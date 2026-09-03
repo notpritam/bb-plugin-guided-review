@@ -28,7 +28,7 @@ test("draft comment then submit builds a batched review", async () => {
   await plugin(bb);
   const store = createStore(bb);
   store.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, repo: "acme/web", status: "ready", createdAt: 1 });
-  store.savePatch("pr-1", "diff --git a/a.ts b/a.ts\n");
+  store.savePatch("pr-1", "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -0,0 +1,2 @@\n+one\n+two\n");
   await harness.behavior.callRpc("saveDraftComment", {
     targetKey: "pr-1",
     comment: { file: "a.ts", line: 1, side: "RIGHT", body: "nit" },

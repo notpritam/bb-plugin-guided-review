@@ -25,8 +25,10 @@ import {
   ghPrHeadArgs,
   runGh,
   runGit,
+  ghErrorMessage,
 } from "./src/gh";
 import { toGithubReviewPayload } from "./src/draft";
+import { invalidComments } from "./src/review-positions";
 import { parseChecks, parseReviewThreads } from "./src/threads";
 import { rerunReview } from "./src/rereview";
 import { getGhAccounts, switchGhAccount, checkRepoAccess } from "./src/gh-accounts";
@@ -108,15 +110,15 @@ export default async function plugin(bb: BbPluginApi) {
       const m = store.getReview(targetKey);
       if (!m || m.kind !== "pr" || !m.number || !m.repo) return { ok: false, error: "Not a PR." };
       const r = await runGh(ghReplyThreadArgs(m.repo, m.number, inReplyTo), { stdin: JSON.stringify({ body }) });
-      return r.code === 0 ? { ok: true } : { ok: false, error: r.stderr || "reply failed" };
+      return r.code === 0 ? { ok: true } : { ok: false, error: ghErrorMessage(r) };
     },
     async resolveThread({ threadId }) {
       const r = await runGh(ghResolveThreadArgs(threadId));
-      return r.code === 0 ? { ok: true } : { ok: false, error: r.stderr || "resolve failed" };
+      return r.code === 0 ? { ok: true } : { ok: false, error: ghErrorMessage(r) };
     },
     async unresolveThread({ threadId }) {
       const r = await runGh(ghUnresolveThreadArgs(threadId));
-      return r.code === 0 ? { ok: true } : { ok: false, error: r.stderr || "unresolve failed" };
+      return r.code === 0 ? { ok: true } : { ok: false, error: ghErrorMessage(r) };
     },
     async checkForUpdates({ targetKey }) {
       const m = store.getReview(targetKey);
@@ -153,9 +155,25 @@ export default async function plugin(bb: BbPluginApi) {
       if (!m || m.kind !== "pr" || !m.number || !m.repo) {
         return { ok: false, error: "Submitting requires a GitHub PR target." };
       }
-      const payload = toGithubReviewPayload(store.getDraft(targetKey));
-      const r = await runGh(ghSubmitReviewArgs(m.repo, m.number), { stdin: JSON.stringify(payload) });
-      if (r.code !== 0) return { ok: false, error: r.stderr || "gh review submit failed" };
+      const draft = store.getDraft(targetKey);
+      // GitHub rejects an empty Comment review outright.
+      if (draft.verdict === "COMMENT" && !draft.body.trim() && draft.comments.length === 0) {
+        return { ok: false, error: "Add a summary or at least one comment before submitting a Comment review." };
+      }
+      // Validate comment positions against the diff so we don't send a payload
+      // GitHub will 422 on (line not part of the diff / wrong side / stale file).
+      const total = store.readPatch(targetKey, 0, 0).total;
+      const patch = store.readPatch(targetKey, 0, total).text;
+      const bad = invalidComments(patch, draft.comments);
+      if (bad.length) {
+        const list = bad.map((c) => `${c.file}:${c.line}`).join(", ");
+        return {
+          ok: false,
+          error: `These comments aren't on lines in the current diff, so GitHub would reject the review: ${list}. Edit or remove them (a re-review may have moved the code), then resubmit.`,
+        };
+      }
+      const r = await runGh(ghSubmitReviewArgs(m.repo, m.number), { stdin: JSON.stringify(toGithubReviewPayload(draft)) });
+      if (r.code !== 0) return { ok: false, error: ghErrorMessage(r) };
       return { ok: true };
     },
 

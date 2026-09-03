@@ -64,12 +64,13 @@ export function extractSelectedLines(
     } else if (c === "-") {
       if (wantOld && oldLine >= lo && oldLine <= hi) out.push(line);
       oldLine++;
-    } else {
+    } else if (c === " ") {
       const n = wantOld ? oldLine : newLine;
       if (n >= lo && n <= hi) out.push(line);
       newLine++;
       oldLine++;
     }
+    // else: blank / "\ No newline" / artifact — skip without counting.
   }
   return out.join("\n");
 }

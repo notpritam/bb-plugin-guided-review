@@ -72,3 +72,33 @@ function run(bin: string, args: string[], opts: RunOpts = {}): Promise<RunResult
 
 export const runGh = (args: string[], opts?: RunOpts) => run("gh", args, opts);
 export const runGit = (args: string[], opts?: RunOpts) => run("git", args, opts);
+
+/**
+ * Turn a failed `gh api` result into a legible message. `gh` prints the GitHub
+ * response body (message + field errors) to stderr after its own "gh: …" line;
+ * parse it so the user sees "line must be part of the diff" instead of a bare
+ * "Unprocessable Entity (HTTP 422)".
+ */
+export function ghErrorMessage(r: { stdout: string; stderr: string }): string {
+  const raw = (r.stderr || r.stdout || "").trim();
+  const brace = raw.indexOf("{");
+  if (brace >= 0) {
+    try {
+      const body = JSON.parse(raw.slice(brace));
+      const parts: string[] = [];
+      if (typeof body.message === "string") parts.push(body.message);
+      if (Array.isArray(body.errors)) {
+        for (const e of body.errors) {
+          if (typeof e === "string") parts.push(e);
+          else if (e?.message) parts.push(String(e.message));
+          else if (e?.field) parts.push(`${e.resource ?? "field"}.${e.field} ${e.code ?? "invalid"}`);
+        }
+      }
+      if (parts.length) return [...new Set(parts)].join(" — ");
+    } catch {
+      // fall through to the raw text
+    }
+  }
+  // Strip the leading "gh: " prefix if that's all we have.
+  return raw.replace(/^gh:\s*/, "") || "GitHub request failed";
+}

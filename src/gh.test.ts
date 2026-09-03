@@ -2,8 +2,21 @@ import { test, expect } from "vitest";
 import {
   ghPrViewArgs, ghPrDiffArgs, ghRepoViewArgs, ghSubmitReviewArgs, gitDiffArgs,
   ghPrChecksJsonArgs, ghPrHeadArgs, ghReviewThreadsArgs, ghReplyThreadArgs,
-  ghResolveThreadArgs, ghUnresolveThreadArgs,
+  ghResolveThreadArgs, ghUnresolveThreadArgs, ghErrorMessage,
 } from "./gh";
+
+test("ghErrorMessage surfaces GitHub's message + field errors from a 422 body", () => {
+  const stderr =
+    'gh: Unprocessable Entity (HTTP 422)\n{"message":"Validation Failed","errors":[{"resource":"PullRequestReviewComment","field":"line","code":"invalid","message":"line must be part of the diff"}]}';
+  const msg = ghErrorMessage({ stdout: "", stderr });
+  expect(msg).toContain("Validation Failed");
+  expect(msg).toContain("line must be part of the diff");
+  expect(msg).not.toContain("HTTP 422"); // the opaque prefix is dropped
+});
+
+test("ghErrorMessage falls back to the raw text without the 'gh:' prefix", () => {
+  expect(ghErrorMessage({ stdout: "", stderr: "gh: could not resolve host" })).toBe("could not resolve host");
+});
 
 test("pr view requests the json fields we need, with optional -R", () => {
   expect(ghPrViewArgs(12)).toEqual([
