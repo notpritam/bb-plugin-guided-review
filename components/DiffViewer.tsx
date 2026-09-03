@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from "react";
 import { parsePatchFiles } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
+import type { SelectedLineRange } from "@pierre/diffs";
 import { splitPatchByFile } from "../src/patch";
 import { cn } from "../lib/utils";
 import { Icon } from "./ui/icon";
@@ -36,12 +37,14 @@ export const DiffViewer = memo(function DiffViewer({
   views,
   onToggleViewed,
   registerFileEl,
+  onLineSelected,
 }: {
   patch: string;
   files: string[];
   views: Map<string, FileViewFlags>;
   onToggleViewed: (file: string, viewed: boolean) => void;
   registerFileEl?: (file: string, el: HTMLElement | null) => void;
+  onLineSelected?: (file: string, range: SelectedLineRange | null) => void;
 }) {
   const theme = useTheme();
   const perFile = useMemo(() => {
@@ -124,7 +127,19 @@ export const DiffViewer = memo(function DiffViewer({
             </div>
             {!folded && (
               <div className="overflow-x-auto">
-                <FileDiff fileDiff={fileDiff!} options={theme ? { theme } : undefined} />
+                <FileDiff
+                  fileDiff={fileDiff!}
+                  options={{
+                    ...(theme ? { theme } : {}),
+                    // GitHub-style line picking: drag to select a range, or use
+                    // the gutter "+". Uncontrolled — pierre paints the highlight;
+                    // we just capture the range to offer comment / ask-agent.
+                    enableLineSelection: true,
+                    enableGutterUtility: true,
+                    onLineSelected: (range) => onLineSelected?.(path, range),
+                    onGutterUtilityClick: (range) => onLineSelected?.(path, range),
+                  }}
+                />
               </div>
             )}
           </div>

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRpc, useRealtime } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
+import type { SelectedLineRange } from "@pierre/diffs";
 import type { rpcContract } from "../src/rpc-contract";
 import { cn } from "../lib/utils";
 import { getReviewState, patchReviewState, setLastReview } from "../lib/panel-state";
@@ -9,10 +10,11 @@ import { Icon } from "./ui/icon";
 import { ReviewHeader } from "./ReviewHeader";
 import { ChapterNav } from "./ChapterNav";
 import { DiffViewer, type FileViewFlags } from "./DiffViewer";
-import { DraftTray } from "./DraftTray";
+import { DraftTray, type CommentPrefill } from "./DraftTray";
 import { RereviewBanner } from "./RereviewBanner";
 import { ThreadsPanel } from "./ThreadsPanel";
 import { AgentDock, type DockInjection } from "./AgentDock";
+import { ReviewSkeleton, ReviewError } from "./ReviewSkeleton";
 
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 560;
@@ -32,6 +34,8 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const [injection, setInjection] = useState<DockInjection | undefined>();
   const [currentFile, setCurrentFile] = useState<string | undefined>();
   const [sel, setSel] = useState<{ x: number; y: number; file: string; code: string } | null>(null);
+  const [lineSel, setLineSel] = useState<{ file: string; range: SelectedLineRange } | null>(null);
+  const [draftPrefill, setDraftPrefill] = useState<CommentPrefill | undefined>();
 
   // Screen utilization: resizable/collapsible sidebar, focus mode, fullscreen.
   const [sidebarWidth, setSidebarWidth] = useState(persisted.sidebarWidth ?? 288);
@@ -241,6 +245,26 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     window.getSelection()?.removeAllRanges();
   }
 
+  // GitHub-style line selection in the diff (via pierre) → comment / ask agent.
+  const onLineSelected = useCallback((file: string, range: SelectedLineRange | null) => {
+    setLineSel(range ? { file, range } : null);
+  }, []);
+
+  function commentOnLines() {
+    if (!lineSel) return;
+    const { file, range } = lineSel;
+    const side = (range.endSide ?? range.side) === "deletions" ? "LEFT" : "RIGHT";
+    setDraftPrefill({ file, line: range.end, side, nonce: Date.now() });
+    setLineSel(null);
+  }
+
+  function askAboutLines() {
+    if (!lineSel) return;
+    const { file, range } = lineSel;
+    setInjection({ context: { file, startLine: range.start, endLine: range.end, chapterId: activeId }, nonce: Date.now() });
+    setLineSel(null);
+  }
+
   // Sidebar resize drag.
   function startSidebarResize(e: React.PointerEvent) {
     e.preventDefault();
@@ -259,11 +283,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   }
 
   if (!guide) {
-    return (
-      <div className="p-6 text-sm text-muted-foreground">
-        {review?.status === "error" ? "Generation failed. Re-run `bb review`." : "Building the guide…"}
-      </div>
-    );
+    return review?.status === "error" ? <ReviewError /> : <ReviewSkeleton />;
   }
 
   const viewedCount = activeFiles.filter((f) => views.get(f)?.viewed).length;
@@ -405,6 +425,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 views={views}
                 onToggleViewed={toggleViewed}
                 registerFileEl={registerFileEl}
+                onLineSelected={onLineSelected}
               />
             ) : (
               <ThreadsPanel targetKey={targetKey} />
@@ -412,7 +433,38 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           </div>
         </main>
       </div>
-      <DraftTray targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} />
+      <DraftTray targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill} />
+
+      {/* Line-selection action bar — GitHub-style: pick lines, then act. */}
+      {lineSel && (
+        <div className="fixed bottom-24 left-1/2 z-[62] flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-2xl">
+          <span className="text-muted-foreground">
+            {lineSel.file.split("/").pop()}
+            <span className="text-foreground">
+              {" "}
+              L{lineSel.range.start}
+              {lineSel.range.end !== lineSel.range.start ? `–${lineSel.range.end}` : ""}
+            </span>
+          </span>
+          <span className="h-4 w-px bg-border" />
+          <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-xs" onClick={commentOnLines}>
+            <Icon name="BubbleChatQuestion" className="size-3.5" aria-hidden />
+            Add comment
+          </Button>
+          <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-xs" onClick={askAboutLines}>
+            <Icon name="AiContentGenerator01" className="size-3.5" aria-hidden />
+            Ask agent
+          </Button>
+          <button
+            type="button"
+            aria-label="Clear selection"
+            onClick={() => setLineSel(null)}
+            className="rounded p-0.5 text-muted-foreground hover:bg-state-hover hover:text-foreground"
+          >
+            <Icon name="X" className="size-3.5" aria-hidden />
+          </button>
+        </div>
+      )}
 
       {sel && (
         <button

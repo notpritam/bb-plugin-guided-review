@@ -45,7 +45,7 @@ export const AccountBar = memo(function AccountBar() {
   const others = accounts.filter((a) => !a.active);
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl items-center gap-2 border-b border-border pb-2 text-sm">
+    <div className="flex w-full items-center gap-2 border-b border-border pb-3 text-sm">
       <span className="text-muted-foreground">GitHub:</span>
       <span className="font-medium text-foreground">{active ? `@${active}` : "not logged in"}</span>
       {others.length > 0 && (

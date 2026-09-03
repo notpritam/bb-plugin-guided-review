@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
@@ -7,22 +7,44 @@ import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
+export interface CommentPrefill {
+  file: string;
+  line: number;
+  side: "LEFT" | "RIGHT";
+  nonce: number;
+}
+
 export const DraftTray = memo(function DraftTray({
   targetKey,
   activeChapterId,
   activeFiles,
+  prefill,
 }: {
   targetKey: string;
   activeChapterId: string;
   activeFiles: string[];
+  prefill?: CommentPrefill;
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const [draft, setDraft] = useState<any>({ verdict: "COMMENT", body: "", comments: [] });
   const [file, setFile] = useState(activeFiles[0] ?? "");
   const [line, setLine] = useState("1");
+  const [side, setSide] = useState<"LEFT" | "RIGHT">("RIGHT");
   const [body, setBody] = useState("");
   const [showComposer, setShowComposer] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+
+  // A line selection in the diff asked to comment here — open the composer
+  // pre-filled with that file / line / side and focus the comment box.
+  useEffect(() => {
+    if (!prefill) return;
+    setShowComposer(true);
+    setFile(prefill.file);
+    setLine(String(prefill.line));
+    setSide(prefill.side);
+    requestAnimationFrame(() => bodyRef.current?.focus());
+  }, [prefill?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     void rpc.call("getDraft", { targetKey }).then((r) => setDraft(r.draft));
@@ -38,7 +60,7 @@ export const DraftTray = memo(function DraftTray({
     try {
       const { draft } = await rpc.call("saveDraftComment", {
         targetKey,
-        comment: { file, line: lineNum, side: "RIGHT", chapterId: activeChapterId, body },
+        comment: { file, line: lineNum, side, chapterId: activeChapterId, body },
       });
       setDraft(draft);
       setBody("");
@@ -134,6 +156,7 @@ export const DraftTray = memo(function DraftTray({
                 className="w-16"
               />
               <Textarea
+                ref={bodyRef}
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 placeholder="comment"
