@@ -13,10 +13,11 @@ interface AgentTurnArgs {
 const MAX_FILE_DIFF = 40_000;
 
 /** The persistent thread's opening system-style preamble. */
-export function buildSeedPrompt(guide: Guide | null): string {
+export function buildSeedPrompt(guide: Guide | null, targetKey: string): string {
   const lines = [
     "You are the review agent for a code change. Answer the reviewer's questions concisely and",
     "specifically, grounded in the diff they reference. When they select code or name a file, focus there.",
+    `To read the full diff of any file across this review, call the read_review_patch tool with targetKey "${targetKey}".`,
   ];
   if (guide) {
     lines.push("", `Change intent: ${guide.intent}`);
@@ -79,7 +80,7 @@ export async function runAgentTurn(bb: BbPluginApi, store: Store, args: AgentTur
     const worker = await bb.sdk.threads.spawn({
       projectId: args.projectId,
       environment: { type: "project-default" },
-      prompt: `${buildSeedPrompt(guide)}\n\n${turnText}`,
+      prompt: `${buildSeedPrompt(guide, args.targetKey)}\n\n${turnText}`,
       title: `Review agent: ${args.targetKey}`,
       visibility: "visible",
     });
@@ -110,7 +111,7 @@ export async function openAgentThread(
     const worker = await bb.sdk.threads.spawn({
       projectId: args.projectId,
       environment: { type: "project-default" },
-      prompt: buildSeedPrompt(store.getGuide(args.targetKey)),
+      prompt: buildSeedPrompt(store.getGuide(args.targetKey), args.targetKey),
       title: `Review agent: ${args.targetKey}`,
       visibility: "visible",
     });

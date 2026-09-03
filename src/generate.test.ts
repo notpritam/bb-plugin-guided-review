@@ -137,11 +137,18 @@ test("agents.configure exposes tools/skill only to this plugin's own generation 
   expect(absent.tools).toEqual([]);
   expect(absent.skills).toEqual([]);
 
-  // Same plugin origin, but this plugin ALSO spawns the assist Q&A thread —
-  // it must not receive the generation-only tools/skill.
-  const assistThread = await h.harness.behavior.resolveAgentConfiguration(
-    baseConfigContext("guided-review", "Assist: pr-1"),
+  // Same plugin origin: the floating review-agent thread gets the read tool so
+  // its chat works across the review, but never the guide-writing tool/skill.
+  const agentThread = await h.harness.behavior.resolveAgentConfiguration(
+    baseConfigContext("guided-review", "Review agent: pr-1"),
   );
-  expect(assistThread.tools).toEqual([]);
-  expect(assistThread.skills).toEqual([]);
+  expect(agentThread.tools.map((t) => t.name)).toEqual(["read_review_patch"]);
+  expect(agentThread.skills).toEqual([]);
+
+  // An unrelated same-plugin thread still gets nothing.
+  const other = await h.harness.behavior.resolveAgentConfiguration(
+    baseConfigContext("guided-review", "Something else: pr-1"),
+  );
+  expect(other.tools).toEqual([]);
+  expect(other.skills).toEqual([]);
 });

@@ -52,15 +52,20 @@ test("a later turn reuses the thread via send, does not spawn again", async () =
   expect(store.listAgentMessages("pr-1")).toHaveLength(4);
 });
 
-test("seed prompt carries intent and chapter outline", () => {
-  const seed = buildSeedPrompt({
-    title: "T",
-    intent: "Add token refresh",
-    sections: [{ id: "s1", title: "Auth", overview: "refresh before expiry", diffs: [] }],
-    unplacedFiles: [],
-  } as any);
+test("seed prompt carries intent, chapter outline, and the read tool + targetKey", () => {
+  const seed = buildSeedPrompt(
+    {
+      title: "T",
+      intent: "Add token refresh",
+      sections: [{ id: "s1", title: "Auth", overview: "refresh before expiry", diffs: [] }],
+      unplacedFiles: [],
+    } as any,
+    "pr-42",
+  );
   expect(seed).toContain("Add token refresh");
   expect(seed).toContain("Auth");
+  expect(seed).toContain("read_review_patch");
+  expect(seed).toContain("pr-42");
 });
 
 test("turn text inlines a selection when provided", () => {

@@ -254,11 +254,18 @@ export default async function plugin(bb: BbPluginApi) {
   // review-agent thread ("Review agent: …") answers from inlined context and
   // intentionally gets no tools.
   bb.agents.configure((context) => {
-    const isGenerationThread =
-      context.origin?.pluginId === bb.pluginId && (context.thread?.title ?? "").startsWith("Generate guide:");
-    return isGenerationThread
-      ? { tools: ["read_review_patch", "generate_review_guide"], skills: ["guided-review-generate"] }
-      : { tools: [], skills: [] };
+    if (context.origin?.pluginId !== bb.pluginId) return { tools: [], skills: [] };
+    const title = context.thread?.title ?? "";
+    if (title.startsWith("Generate guide:")) {
+      return { tools: ["read_review_patch", "generate_review_guide"], skills: ["guided-review-generate"] };
+    }
+    // The floating review-agent thread can read any file's diff on demand, so
+    // the chat works across the whole review — but it never gets the
+    // guide-writing tool or the generation skill.
+    if (title.startsWith("Review agent:")) {
+      return { tools: ["read_review_patch"], skills: [] };
+    }
+    return { tools: [], skills: [] };
   });
 
   bb.cli.register({

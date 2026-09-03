@@ -6,8 +6,9 @@ review back to GitHub.
 
 Instead of a flat list of files, a PR arrives as an ordered *story*: the implementation heart
 first, its consequences next, and the glue/config last. A bb agent reads the diff and writes the
-guide; you read the chapters, browse syntax-highlighted diffs, ask the agent questions inline,
-leave comments, and submit — all without leaving bb.
+guide; you read the chapters, browse syntax-highlighted diffs, tick files as you review them,
+ask a floating review agent about any file or highlighted snippet, leave comments, and submit —
+all without leaving bb.
 
 Inspired by [plannotator/guides](https://github.com/plannotator/guides) (the "guided review"
 concept and its `guide.json` shape), but native to bb: the generation engine is a bb agent, the
@@ -58,8 +59,16 @@ Then open the **Guided Review** panel in the sidebar to watch the guide build an
 - **Review actions** — per-line and per-chapter draft comments, a verdict
   (Approve / Request changes / Comment), and **one batched submit** back to the real GitHub PR
   (`gh api .../pulls/{n}/reviews`).
-- **Inline agent-assist** — ask the agent to explain a chapter, assess risk, or draft a comment
-  while you review.
+- **Floating review agent** — a draggable, resizable chat window (opened from the agent button)
+  that answers questions about the change. It always knows the file/chapter you're on, lets you
+  **highlight any text in a diff to ask about it**, can read any file across the review, and is
+  backed by a real bb thread you can open standalone.
+- **Viewed tracking** — tick a file "viewed" to collapse it (GitHub-style), with a per-chapter
+  **"N / M viewed"** counter and a *Mark all*; a file re-flags itself as `changed` if it moves on
+  a re-review.
+- **Skimmable sidebar** — chapter titles wrap instead of clipping, risk reads as a worded flag,
+  and each chapter expands into its files with tests / generated / lockfiles tagged **skippable**
+  so you can see what you don't need to read.
 - **CI status** — the PR's checks (pass / fail / pending) surface in the panel header.
 - **Chapter risk badges** — the generation agent flags each chapter `low` / `medium` / `high`.
 - **Existing review threads** — see, reply to, and resolve / unresolve the PR's existing review
