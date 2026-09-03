@@ -30,6 +30,8 @@ export interface AgentMessageContext {
   file?: string;
   startLine?: number;
   endLine?: number;
+  /** Which column a line range was picked on (new vs old file). */
+  side?: "additions" | "deletions";
   code?: string;
   chapterId?: string;
 }

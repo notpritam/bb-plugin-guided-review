@@ -262,7 +262,11 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   function askAboutLines() {
     if (!lineSel) return;
     const { file, range } = lineSel;
-    setInjection({ context: { file, startLine: range.start, endLine: range.end, chapterId: activeId }, nonce: Date.now() });
+    const side = (range.endSide ?? range.side) === "deletions" ? "deletions" : "additions";
+    setInjection({
+      context: { file, startLine: range.start, endLine: range.end, side, chapterId: activeId },
+      nonce: Date.now(),
+    });
     setLineSel(null);
   }
 

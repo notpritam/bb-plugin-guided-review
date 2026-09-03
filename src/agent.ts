@@ -29,6 +29,51 @@ export function buildSeedPrompt(guide: Guide | null, targetKey: string): string 
   return lines.join("\n");
 }
 
+/**
+ * Extract exactly the lines a reviewer selected (by 1-based line number on the
+ * new or old side) from a file's unified diff, keeping the +/-/space prefixes.
+ * Walks each hunk tracking old/new line counters. Returns "" if nothing matches.
+ */
+export function extractSelectedLines(
+  patch: string,
+  file: string,
+  start: number,
+  end: number,
+  side: "additions" | "deletions" = "additions",
+): string {
+  const f = splitPatchByFile(patch).find((x) => x.path === file);
+  if (!f) return "";
+  const lo = Math.min(start, end);
+  const hi = Math.max(start, end);
+  const wantOld = side === "deletions";
+  const out: string[] = [];
+  let oldLine = 0;
+  let newLine = 0;
+  for (const line of f.text.split("\n")) {
+    const h = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (h) {
+      oldLine = Number(h[1]);
+      newLine = Number(h[2]);
+      continue;
+    }
+    if (/^(diff --git|index |--- |\+\+\+ )/.test(line)) continue;
+    const c = line[0];
+    if (c === "+") {
+      if (!wantOld && newLine >= lo && newLine <= hi) out.push(line);
+      newLine++;
+    } else if (c === "-") {
+      if (wantOld && oldLine >= lo && oldLine <= hi) out.push(line);
+      oldLine++;
+    } else {
+      const n = wantOld ? oldLine : newLine;
+      if (n >= lo && n <= hi) out.push(line);
+      newLine++;
+      oldLine++;
+    }
+  }
+  return out.join("\n");
+}
+
 /** One reviewer turn: their question plus any file/selection context, inlined. */
 export function buildTurnText(args: { message: string; context?: AgentMessageContext; patch: string }): string {
   const { message, context, patch } = args;
@@ -36,13 +81,31 @@ export function buildTurnText(args: { message: string; context?: AgentMessageCon
 
   const lineRange =
     context.startLine != null
-      ? ` (lines ${context.startLine}${context.endLine != null && context.endLine !== context.startLine ? `-${context.endLine}` : ""})`
+      ? ` lines ${context.startLine}${context.endLine != null && context.endLine !== context.startLine ? `-${context.endLine}` : ""}`
       : "";
 
+  // Text highlight — the reviewer already handed us the exact code.
   if (context.code && context.code.trim()) {
-    return `${message}\n\nSelected from ${context.file}${lineRange}:\n\`\`\`\n${context.code}\n\`\`\``;
+    return `${message}\n\nThe reviewer highlighted this in ${context.file}${lineRange}:\n\`\`\`\n${context.code}\n\`\`\``;
   }
 
+  // Line-range selection (gutter "+" / drag) — pull those exact lines from the
+  // diff so the agent answers about the selection, not the whole file.
+  if (context.startLine != null) {
+    const snippet = extractSelectedLines(
+      patch,
+      context.file,
+      context.startLine,
+      context.endLine ?? context.startLine,
+      context.side,
+    ).slice(0, MAX_FILE_DIFF);
+    if (snippet.trim()) {
+      return `${message}\n\nThe reviewer selected ${context.file}${lineRange}. Focus on exactly these lines (use read_review_patch for surrounding context):\n\`\`\`diff\n${snippet}\n\`\`\``;
+    }
+    return `${message}\n\nThe reviewer is asking about ${context.file}${lineRange}. Use read_review_patch to read that region.`;
+  }
+
+  // Whole-file focus.
   const scoped = splitPatchByFile(patch)
     .filter((f) => f.path === context.file)
     .map((f) => f.text)

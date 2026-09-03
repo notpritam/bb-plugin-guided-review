@@ -11,6 +11,7 @@ const agentContext = z
     file: z.string().optional(),
     startLine: z.number().int().optional(),
     endLine: z.number().int().optional(),
+    side: z.enum(["additions", "deletions"]).optional(),
     code: z.string().optional(),
     chapterId: z.string().optional(),
   })

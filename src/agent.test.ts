@@ -1,7 +1,20 @@
 import { test, expect } from "vitest";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { createStore } from "./store";
-import { runAgentTurn, buildSeedPrompt, buildTurnText } from "./agent";
+import { runAgentTurn, buildSeedPrompt, buildTurnText, extractSelectedLines } from "./agent";
+
+const linePatch = [
+  "diff --git a/x.ts b/x.ts",
+  "--- a/x.ts",
+  "+++ b/x.ts",
+  "@@ -1,3 +1,4 @@",
+  " a",
+  "-b",
+  "+b2",
+  "+c",
+  " d",
+  "",
+].join("\n");
 
 function host() {
   let spawns = 0;
@@ -68,7 +81,7 @@ test("seed prompt carries intent, chapter outline, and the read tool + targetKey
   expect(seed).toContain("pr-42");
 });
 
-test("turn text inlines a selection when provided", () => {
+test("turn text inlines a highlighted code selection when provided", () => {
   const text = buildTurnText({
     message: "is this safe?",
     context: { file: "a.ts", startLine: 3, endLine: 4, code: "const x = 1" },
@@ -77,4 +90,24 @@ test("turn text inlines a selection when provided", () => {
   expect(text).toContain("is this safe?");
   expect(text).toContain("a.ts");
   expect(text).toContain("const x = 1");
+});
+
+test("extractSelectedLines pulls the exact new-side lines of a range", () => {
+  expect(extractSelectedLines(linePatch, "x.ts", 2, 3, "additions")).toBe("+b2\n+c");
+});
+
+test("extractSelectedLines pulls old-side (deletions) lines", () => {
+  expect(extractSelectedLines(linePatch, "x.ts", 2, 2, "deletions")).toBe("-b");
+});
+
+test("a line-range selection inlines exactly those lines and focuses the agent", () => {
+  const text = buildTurnText({
+    message: "why this loop?",
+    context: { file: "x.ts", startLine: 2, endLine: 3, side: "additions" },
+    patch: linePatch,
+  });
+  expect(text).toContain("x.ts lines 2-3");
+  expect(text).toContain("+b2");
+  expect(text).toContain("+c");
+  expect(text).toContain("Focus on exactly these lines");
 });
