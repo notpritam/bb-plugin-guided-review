@@ -43,6 +43,20 @@ test("sending a message calls askAgent with the current-file context", async () 
   );
 });
 
+test("portals into the provided container so it survives fullscreen", async () => {
+  const { AgentDock } = await import("./AgentDock");
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  renderSlot(
+    { component: AgentDock },
+    { targetKey: "pr-1", container: host },
+    { rpc: { getAgentMessages: () => ({ messages: [] }) } as any },
+  );
+  // The FAB must live inside the fullscreen-able container, not document.body.
+  expect(host.querySelector('[aria-label="Ask the review agent"]')).toBeTruthy();
+  host.remove();
+});
+
 test("the header link opens the underlying bb thread", async () => {
   const { AgentDock } = await import("./AgentDock");
   const openAgentThread = vi.fn(() => ({ threadId: "th_1" }));

@@ -46,7 +46,8 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const fileEls = useRef<Map<string, HTMLElement>>(new Map());
   const pendingScroll = useRef<string | null>(null);
   const scrollBox = useRef<HTMLDivElement>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null);
   const didRestoreScroll = useRef(false);
   const reducedMotion =
     typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
@@ -289,7 +290,13 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const viewedCount = activeFiles.filter((f) => views.get(f)?.viewed).length;
 
   return (
-    <div ref={rootRef} className="flex h-full flex-col bg-background">
+    <div
+      ref={(el) => {
+        rootRef.current = el;
+        setRootEl(el);
+      }}
+      className="flex h-full flex-col bg-background"
+    >
       {/* Header — full when reviewing normally, slim in focus mode. */}
       {focus ? (
         <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
@@ -478,7 +485,13 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         </button>
       )}
 
-      <AgentDock targetKey={targetKey} currentFile={currentFile} currentChapterId={activeId} injection={injection} />
+      <AgentDock
+        targetKey={targetKey}
+        currentFile={currentFile}
+        currentChapterId={activeId}
+        injection={injection}
+        container={rootEl}
+      />
     </div>
   );
 });

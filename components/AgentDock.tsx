@@ -56,11 +56,19 @@ export const AgentDock = memo(function AgentDock({
   currentFile,
   currentChapterId,
   injection,
+  container,
 }: {
   targetKey: string;
   currentFile?: string;
   currentChapterId?: string;
   injection?: DockInjection;
+  /**
+   * Where to portal into. Pass the element that can enter fullscreen (the panel
+   * root): when it goes fullscreen the browser only paints that element's
+   * subtree, so a dock portaled to document.body would vanish. `position: fixed`
+   * still resolves against the viewport, so normal-mode placement is unchanged.
+   */
+  container?: HTMLElement | null;
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const scopeProps = usePortalScopeProps();
@@ -84,7 +92,11 @@ export const AgentDock = memo(function AgentDock({
   }, [rpc, targetKey]);
 
   useEffect(() => {
-    if (open) refresh();
+    if (open) {
+      refresh();
+      // Open → ready to type: focus the composer immediately.
+      requestAnimationFrame(() => composerRef.current?.focus());
+    }
   }, [open, refresh]);
   useRealtime(`agent:${targetKey}`, refresh);
 
@@ -255,12 +267,12 @@ export const AgentDock = memo(function AgentDock({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void send();
               }
             }}
-            placeholder="Ask the agent…  (⌘/Ctrl+Enter)"
+            placeholder="Ask the agent…  (Enter to send)"
             className="max-h-28 min-h-[2.25rem] flex-1 resize-none text-xs"
           />
           <Button size="sm" disabled={busy || !input.trim()} onClick={send} aria-label="Send">
@@ -284,7 +296,7 @@ export const AgentDock = memo(function AgentDock({
       {fab}
       {window_}
     </>,
-    document.body,
+    container ?? document.body,
   );
 });
 AgentDock.displayName = "AgentDock";
