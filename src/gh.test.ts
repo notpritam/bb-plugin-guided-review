@@ -14,6 +14,15 @@ test("ghErrorMessage surfaces GitHub's message + field errors from a 422 body", 
   expect(msg).not.toContain("HTTP 422"); // the opaque prefix is dropped
 });
 
+test("ghErrorMessage reads the body from stdout (where gh api writes it)", () => {
+  // gh api puts the JSON body on stdout and only the terse summary on stderr.
+  const r = {
+    stdout: '{"message":"Unprocessable Entity","documentation_url":"https://docs.github.com"}',
+    stderr: "gh: Unprocessable Entity (HTTP 422)",
+  };
+  expect(ghErrorMessage(r)).toBe("Unprocessable Entity");
+});
+
 test("ghErrorMessage falls back to the raw text without the 'gh:' prefix", () => {
   expect(ghErrorMessage({ stdout: "", stderr: "gh: could not resolve host" })).toBe("could not resolve host");
 });

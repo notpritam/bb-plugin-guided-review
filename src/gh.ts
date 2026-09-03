@@ -74,21 +74,30 @@ export const runGh = (args: string[], opts?: RunOpts) => run("gh", args, opts);
 export const runGit = (args: string[], opts?: RunOpts) => run("git", args, opts);
 
 /**
- * Turn a failed `gh api` result into a legible message. `gh` prints the GitHub
- * response body (message + field errors) to stderr after its own "gh: …" line;
- * parse it so the user sees "line must be part of the diff" instead of a bare
- * "Unprocessable Entity (HTTP 422)".
+ * Turn a failed `gh api` result into a legible message. Crucially, `gh api`
+ * writes the GitHub response BODY (message + field errors) to **stdout** and
+ * only a terse "gh: … (HTTP nnn)" summary to stderr — so we must parse stdout,
+ * not just stderr, or the user is left with a bare "Unprocessable Entity".
  */
 export function ghErrorMessage(r: { stdout: string; stderr: string }): string {
-  const raw = (r.stderr || r.stdout || "").trim();
-  const brace = raw.indexOf("{");
-  if (brace >= 0) {
+  const detail = extractGhBody(r.stdout) ?? extractGhBody(r.stderr);
+  if (detail) return detail;
+  const status = (r.stderr || r.stdout || "").trim().replace(/^gh:\s*/, "");
+  return status || "GitHub request failed";
+}
+
+function extractGhBody(text: string): string | null {
+  if (!text) return null;
+  const brace = text.indexOf("{");
+  if (brace < 0) return null;
+  // Try the tail from the first "{", then a trimmed first..last "{...}" slice.
+  for (const candidate of [text.slice(brace), text.slice(brace, text.lastIndexOf("}") + 1)]) {
     try {
-      const body = JSON.parse(raw.slice(brace));
+      const body = JSON.parse(candidate) as { message?: unknown; errors?: unknown };
       const parts: string[] = [];
       if (typeof body.message === "string") parts.push(body.message);
       if (Array.isArray(body.errors)) {
-        for (const e of body.errors) {
+        for (const e of body.errors as any[]) {
           if (typeof e === "string") parts.push(e);
           else if (e?.message) parts.push(String(e.message));
           else if (e?.field) parts.push(`${e.resource ?? "field"}.${e.field} ${e.code ?? "invalid"}`);
@@ -96,9 +105,8 @@ export function ghErrorMessage(r: { stdout: string; stderr: string }): string {
       }
       if (parts.length) return [...new Set(parts)].join(" — ");
     } catch {
-      // fall through to the raw text
+      // try the next candidate slice
     }
   }
-  // Strip the leading "gh: " prefix if that's all we have.
-  return raw.replace(/^gh:\s*/, "") || "GitHub request failed";
+  return null;
 }

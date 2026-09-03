@@ -173,7 +173,10 @@ export default async function plugin(bb: BbPluginApi) {
         };
       }
       const r = await runGh(ghSubmitReviewArgs(m.repo, m.number), { stdin: JSON.stringify(toGithubReviewPayload(draft)) });
-      if (r.code !== 0) return { ok: false, error: ghErrorMessage(r) };
+      if (r.code !== 0) {
+        bb.log.warn(`gh review submit failed: ${r.stderr?.trim()} | body: ${r.stdout?.trim()}`);
+        return { ok: false, error: ghErrorMessage(r) };
+      }
       return { ok: true };
     },
 
