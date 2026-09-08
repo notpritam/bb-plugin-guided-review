@@ -1,0 +1,43 @@
+import type { Store } from "./store";
+import { ghErrorMessage, ghPrHeadArgs, ghSubmitReviewArgs, type runGh } from "./gh";
+import { toGithubReviewPayload } from "./draft";
+import { invalidComments } from "./review-positions";
+
+export function createReviewSubmitter(store: Store, run: typeof runGh) {
+  const inFlight = new Set<string>();
+  return async (targetKey: string): Promise<{ ok: boolean; error?: string }> => {
+    if (inFlight.has(targetKey)) return { ok: false, error: "This review is already being submitted." };
+    inFlight.add(targetKey);
+    try {
+      const m = store.getReview(targetKey);
+      if (!m || m.kind !== "pr" || !m.number || !m.repo) return { ok: false, error: "Submitting requires a GitHub PR target." };
+      if (m.status === "generating") return { ok: false, error: "Wait for the review to finish generating before submitting." };
+      if (!m.headSha) return { ok: false, error: "Re-review this PR before submitting so the reviewed revision can be verified." };
+      const draft = store.getDraft(targetKey);
+      if (draft.verdict === "COMMENT" && !draft.body.trim() && !draft.comments.length) return { ok: false, error: "Add a summary or at least one comment before submitting a Comment review." };
+      if (draft.verdict === "REQUEST_CHANGES" && !draft.body.trim()) return { ok: false, error: "Add a summary explaining the requested changes before submitting." };
+      if (draft.comments.some((c) => !c.body.trim())) return { ok: false, error: "Draft comments cannot be blank." };
+      if (store.staleDraftComments(targetKey).length) return { ok: false, error: "The diff changed after these comments were drafted. Remove affected comments and add them again against the current diff before submitting." };
+      const patch = store.readPatch(targetKey, 0, store.readPatch(targetKey, 0, 0).total).text;
+      const bad = invalidComments(patch, draft.comments);
+      if (bad.length) return { ok: false, error: `These comments are outside the current diff: ${bad.map((c) => `${c.file}:${c.line}`).join(", ")}. Remove them and add any replacement comments on lines in the current diff.` };
+      const head = await run(ghPrHeadArgs(m.number, m.repo));
+      if (head.code !== 0) return { ok: false, error: ghErrorMessage(head) };
+      let current: unknown;
+      try { current = JSON.parse(head.stdout)?.headRefOid; } catch { /* reject below */ }
+      if (typeof current !== "string" || !current) return { ok: false, error: "Could not verify the PR revision. Your draft has been kept." };
+      if (current !== m.headSha) return { ok: false, error: "The PR has new commits. Re-review the latest changes before submitting. Your draft has been kept." };
+      if (store.getReview(targetKey)?.status === "generating" || store.getReview(targetKey)?.headSha !== m.headSha) return { ok: false, error: "The review changed during submission. Wait for generation and review the draft again." };
+      const result = await run(ghSubmitReviewArgs(m.repo, m.number), {
+        stdin: JSON.stringify({ ...toGithubReviewPayload(draft), commit_id: m.headSha }),
+      });
+      if (result.code !== 0) return { ok: false, error: ghErrorMessage(result) };
+      store.clearSubmittedDraft(draft);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Could not submit the review. Your draft has been kept." };
+    } finally {
+      inFlight.delete(targetKey);
+    }
+  };
+}

@@ -91,6 +91,14 @@ test("getChecks returns a structured bucket + checks", async () => {
   expect(res.checks).toEqual([{ name: "lint", state: "SUCCESS", bucket: "pass", link: "https://x/1" }]);
 });
 
+test.each([1, 8])("getChecks keeps failed/pending checks returned with gh exit %s", async (code) => {
+  const { harness } = await seeded();
+  vi.mocked(gh.runGh).mockResolvedValueOnce({ code, stdout: JSON.stringify([{ name: "ci", bucket: code === 1 ? "fail" : "pending", state: code === 1 ? "FAILURE" : "PENDING", link: "https://example.invalid/check" }]), stderr: "" });
+  const result: any = await harness.behavior.callRpc("getChecks", { targetKey: "pr-1" });
+  expect(result.bucket).toBe(code === 1 ? "fail" : "pending");
+  expect(result.checks).toHaveLength(1);
+});
+
 test("getReviewThreads returns parsed threads", async () => {
   const { harness } = await seeded();
   const res: any = await harness.behavior.callRpc("getReviewThreads", { targetKey: "pr-1" });

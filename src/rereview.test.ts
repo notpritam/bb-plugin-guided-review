@@ -6,7 +6,7 @@ vi.mock("./gh", async (orig) => {
     ...real,
     runGh: vi.fn(async (args: string[]) => {
       if (args[1] === "diff") return { stdout: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-o\n+n\n", stderr: "", code: 0 };
-      if (args[1] === "view") return { stdout: JSON.stringify({ headRefOid: "newsha" }), stderr: "", code: 0 };
+      if (args[1] === "view") return { stdout: JSON.stringify({ headRefOid: "newsha", title: "PR", baseRefName: "main", headRefName: "feature", url: "https://github.com/acme/web/pull/7" }), stderr: "", code: 0 };
       return { stdout: "", stderr: "", code: 0 };
     }),
     runGit: vi.fn(async () => ({ stdout: "--- a/b.ts\n+++ b/b.ts\n@@ -1 +1 @@\n-o\n+n\n", stderr: "", code: 0 })),

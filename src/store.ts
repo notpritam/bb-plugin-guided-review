@@ -1,6 +1,7 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Guide } from "./guide";
 import type { Draft, DraftComment, Verdict } from "./draft";
+import { createHash, randomUUID } from "node:crypto";
 
 export interface ReviewMeta {
   targetKey: string;
@@ -53,10 +54,15 @@ export interface Store {
   readPatch(targetKey: string, offset?: number, limit?: number): { text: string; total: number };
   saveGuide(targetKey: string, guide: Guide): void;
   getGuide(targetKey: string): Guide | null;
+  beginGeneration(targetKey: string): string;
+  isCurrentGeneration(targetKey: string, generationId: string): boolean;
+  interruptGenerations(): void;
   getDraft(targetKey: string): Draft;
   upsertDraftComment(targetKey: string, c: DraftComment): Draft;
   removeDraftComment(targetKey: string, index: number): Draft;
   setVerdict(targetKey: string, verdict: Verdict, body: string): Draft;
+  staleDraftComments(targetKey: string): DraftComment[];
+  clearSubmittedDraft(draft: Draft): void;
   // Per-file "Viewed" state (Feature 1).
   getFileViews(targetKey: string): FileView[];
   setFileViewed(targetKey: string, file: string, hash: string): void;
@@ -95,6 +101,10 @@ export function createStore(bb: BbPluginApi): Store {
     `CREATE TABLE IF NOT EXISTS agent_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT, target_key TEXT NOT NULL,
       role TEXT NOT NULL, text TEXT NOT NULL, context TEXT, created_at INTEGER NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS generations (target_key TEXT PRIMARY KEY, generation_id TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS draft_comment_revisions (
+      target_key TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL, side TEXT NOT NULL,
+      patch_hash TEXT NOT NULL, PRIMARY KEY (target_key, file, line, side))`,
   ]);
 
   const rowToMeta = (r: any): ReviewMeta => ({
@@ -152,6 +162,22 @@ export function createStore(bb: BbPluginApi): Store {
       const row: any = db.prepare(`SELECT guide FROM guides WHERE target_key=?`).get(k);
       return row ? (JSON.parse(row.guide) as Guide) : null;
     },
+    beginGeneration(k) {
+      const id = randomUUID();
+      db.transaction(() => {
+        db.prepare(`INSERT INTO generations VALUES (?,?) ON CONFLICT(target_key) DO UPDATE SET generation_id=excluded.generation_id`).run(k, id);
+        db.prepare(`DELETE FROM guides WHERE target_key=?`).run(k);
+        db.prepare(`UPDATE reviews SET status='generating' WHERE target_key=?`).run(k);
+      })();
+      return id;
+    },
+    isCurrentGeneration(k, id) {
+      return (db.prepare(`SELECT generation_id FROM generations WHERE target_key=?`).get(k) as any)?.generation_id === id;
+    },
+    interruptGenerations() {
+      db.prepare(`UPDATE reviews SET status='error' WHERE status='generating'`).run();
+      db.prepare(`DELETE FROM generations`).run();
+    },
     getDraft(k) {
       const row: any = db.prepare(`SELECT * FROM drafts WHERE target_key=?`).get(k);
       if (!row) return { targetKey: k, verdict: "COMMENT", body: "", comments: [] };
@@ -162,6 +188,10 @@ export function createStore(bb: BbPluginApi): Store {
       const i = d.comments.findIndex((x) => x.file === c.file && x.line === c.line && x.side === c.side);
       if (i >= 0) d.comments[i] = c; else d.comments.push(c);
       writeDraft(db, d);
+      const patch = this.readPatch(k, 0, this.readPatch(k, 0, 0).total).text;
+      db.prepare(`INSERT INTO draft_comment_revisions VALUES (?,?,?,?,?)
+        ON CONFLICT(target_key,file,line,side) DO UPDATE SET patch_hash=excluded.patch_hash`)
+        .run(k, c.file, c.line, c.side, patchHash(patch));
       return d;
     },
     removeDraftComment(k, index) {
@@ -175,6 +205,22 @@ export function createStore(bb: BbPluginApi): Store {
       d.verdict = verdict; d.body = body;
       writeDraft(db, d);
       return d;
+    },
+    staleDraftComments(k) {
+      const hash = patchHash(this.readPatch(k, 0, this.readPatch(k, 0, 0).total).text);
+      return this.getDraft(k).comments.filter((c) => {
+        const row = db.prepare(`SELECT patch_hash FROM draft_comment_revisions WHERE target_key=? AND file=? AND line=? AND side=?`).get(k, c.file, c.line, c.side) as any;
+        return row?.patch_hash !== hash;
+      });
+    },
+    clearSubmittedDraft(submitted) {
+      const current = this.getDraft(submitted.targetKey);
+      current.comments = current.comments.filter((c) => !submitted.comments.some((old) => JSON.stringify(old) === JSON.stringify(c)));
+      if (current.body === submitted.body && current.verdict === submitted.verdict) {
+        current.body = "";
+        current.verdict = "COMMENT";
+      }
+      writeDraft(db, current);
     },
     getFileViews(k) {
       return db
@@ -223,6 +269,8 @@ export function createStore(bb: BbPluginApi): Store {
     },
   };
 }
+
+function patchHash(patch: string) { return createHash("sha256").update(patch).digest("hex"); }
 
 function writeDraft(db: any, d: Draft) {
   db.prepare(

@@ -15,7 +15,7 @@ vi.mock("./gh", async (importOriginal) => {
       // `ghSubmitReviewArgs` produces the path as a single element like
       // "repos/acme/web/pulls/1/reviews" — `args.includes("reviews")` (exact
       // element match) never matches that; check for a substring instead.
-      args.some((a) => a.includes("reviews")) ? submit(args) : Promise.resolve({ stdout: "", stderr: "", code: 0 }),
+      args.some((a) => a.includes("reviews")) ? submit(args) : Promise.resolve({ stdout: JSON.stringify({ headRefOid: "sha123" }), stderr: "", code: 0 }),
   };
 });
 
@@ -27,7 +27,7 @@ test("draft comment then submit builds a batched review", async () => {
   const { bb, harness } = createFakePluginHost({ pluginId: "guided-review" });
   await plugin(bb);
   const store = createStore(bb);
-  store.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, repo: "acme/web", status: "ready", createdAt: 1 });
+  store.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, repo: "acme/web", headSha: "sha123", status: "ready", createdAt: 1 });
   store.savePatch("pr-1", "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -0,0 +1,2 @@\n+one\n+two\n");
   await harness.behavior.callRpc("saveDraftComment", {
     targetKey: "pr-1",

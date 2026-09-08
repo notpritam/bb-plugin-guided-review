@@ -1,111 +1,74 @@
 # Guided Review
 
-A [bb](https://getbb.app) plugin that turns a GitHub pull request (or a local git ref) into an
-**agent-authored, chaptered walkthrough** — then lets you review it inside bb and submit the
-review back to GitHub.
+An agent-authored walkthrough of a GitHub pull request or local Git change, inside [BB](https://getbb.app). Read the change in chapters, inspect the diff, ask questions, and prepare your review in one workspace.
 
-Instead of a flat list of files, a PR arrives as an ordered *story*: the implementation heart
-first, its consequences next, and the glue/config last. A bb agent reads the diff and writes the
-guide; you read the chapters, browse syntax-highlighted diffs, tick files as you review them,
-ask a floating review agent about any file or highlighted snippet, leave comments, and submit —
-all without leaving bb.
+**Team preview · v0.1.0.** This repository is private. Each teammate needs repository access and their own BB installation and GitHub authentication. This release does not provide a shared review workspace or separate accounts inside one BB server.
 
-Inspired by [plannotator/guides](https://github.com/plannotator/guides) (the "guided review"
-concept and its `guide.json` shape), but native to bb: the generation engine is a bb agent, the
-viewer is a bb panel, and it writes back to GitHub — no external CLI and no third-party upload.
+## Install and first run
 
-## Prerequisites
+Requirements: **BB 0.41.0 or newer**, a configured BB coding-agent provider, and `git` and GitHub CLI (`gh`) on the **machine running the BB server**. GitHub features currently support **github.com**. A remote browser does not change where these commands run.
 
-- **`gh` (GitHub CLI)** installed and authenticated with `repo` scope (`gh auth login`). All
-  GitHub access is via `gh`, run locally — the plugin never handles a token.
-- **bb** ≥ 0.39.
-
-## Install
+On that server, sign in using your own account with access to this plugin and the repositories you review:
 
 ```sh
-npm install
-bb plugin install .
+gh auth login --hostname github.com
+gh auth setup-git
+bb plugin install git:https://github.com/notpritam/bb-plugin-guided-review.git@v0.1.0
 ```
 
-After editing sources: `bb plugin reload guided-review` (or run `bb plugin dev` to auto-rebuild).
+The tagged release includes compiled bundles; teammates do not need Node.js, npm, or a build step. If GitHub reports this repository is unavailable, check that the signed-in account has team repository access.
 
-## Usage
+1. Open **Guided Review** in BB’s sidebar.
+2. Check the GitHub account shown at the top. Switching accounts affects `gh` on this BB server, including other work that uses it. Environment-token overrides are detected and must be removed before switching saved accounts.
+3. Paste a complete GitHub pull-request URL and choose **Start review**. A BB agent reads the patch and writes a chaptered guide.
+4. Review chapters and diffs, mark files viewed, and write draft comments or review notes.
+5. Choose a verdict and explicitly submit when ready. Drafting and generating a guide do not submit a GitHub review. Replying to or resolving an existing GitHub thread are separate, immediate GitHub actions.
 
-From a project thread's terminal:
+The first-run help is also available inside the panel. Loading, authentication, generation, and save failures provide visible recovery paths.
+
+## Local changes and the command line
+
+Run commands from a project checkout available on the BB server:
 
 ```sh
-bb review <pr-url | pr-number | git-ref> [--base <ref>]
+bb review https://github.com/acme/web/pull/42
+bb review 42                           # PR in the current repository
+bb review origin/main...HEAD           # local range
+bb review my-feature --base main       # branch against main
 ```
 
-Examples:
+The checkout for a local review must exist on the BB server. A checkout only present on another enrolled machine is not supported by this release. Local reviews retain notes in BB and do not offer GitHub submission.
 
-```sh
-bb review 1234                          # a PR number in the current repo
-bb review https://github.com/acme/web/pull/1234
-bb review origin/main...HEAD            # a local range
-bb review my-feature --base main        # a branch, compared against main
-```
+## What the review workspace includes
 
-Then open the **Guided Review** panel in the sidebar to watch the guide build and review it.
+- Ordered chapters with intent, file summaries, and risk labels. Every changed file must appear once in the generated guide.
+- Syntax-highlighted diffs, viewed-file tracking, a resizable chapter sidebar, and a collapsible chapter list on narrow screens.
+- A floating BB review agent that can discuss files or selected text.
+- CI status, existing GitHub review threads, and re-review when new commits arrive.
+- Saved review notes and inline draft comments, with explicit submission and visible save or submission errors.
 
-## What you get
+A review is pinned to the PR snapshot it was generated from. If the PR changes, re-review before submitting. Remove affected inline comments from an older patch, then add any replacements against the current patch. Submission failures retain the draft; repeated clicks cannot submit the same draft concurrently.
 
-- **Agent-generated guide** — a bb agent reads the diff and authors chapters
-  (`title` + `intent` + ordered sections of `{ overview, files }`), with a hard **coverage gate**
-  (every changed file lands in exactly one chapter or `unplacedFiles` — never twice, never
-  omitted).
-- **The panel** — chapter navigator on the left, `@pierre/diffs` syntax-highlighted diffs on the
-  right (rendered exactly like bb's own diff panel), a PR header, and a draft-review tray.
-- **Review actions** — per-line and per-chapter draft comments, a verdict
-  (Approve / Request changes / Comment), and **one batched submit** back to the real GitHub PR
-  (`gh api .../pulls/{n}/reviews`).
-- **Floating review agent** — a draggable, resizable chat window (opened from the agent button)
-  that answers questions about the change. It always knows the file/chapter you're on, lets you
-  **highlight any text in a diff to ask about it**, can read any file across the review, and is
-  backed by a real bb thread you can open standalone.
-- **Viewed tracking** — tick a file "viewed" to collapse it (GitHub-style), with a per-chapter
-  **"N / M viewed"** counter and a *Mark all*; a file re-flags itself as `changed` if it moves on
-  a re-review.
-- **Skimmable sidebar** — chapter titles wrap instead of clipping, risk reads as a worded flag,
-  and each chapter expands into its files with tests / generated / lockfiles tagged **skippable**
-  so you can see what you don't need to read.
-- **CI status** — the PR's checks (pass / fail / pending) surface in the panel header.
-- **Chapter risk badges** — the generation agent flags each chapter `low` / `medium` / `high`.
-- **Existing review threads** — see, reply to, and resolve / unresolve the PR's existing review
-  threads inline, beside the diff.
-- **Re-review on new commits** — when the PR head moves, a banner offers a one-click re-review
-  that rebuilds the guide against the new diff.
-- **Context** — reads the PR title/body and existing review comments.
+## Data and access
 
-Works on a GitHub PR (via `gh`) or any local git ref (branch / commit / range). Local-ref reviews
-skip the GitHub-only bits.
+Review metadata, patches, generated guides, and drafts are stored in this BB installation’s plugin database. Review agents receive the patch and context through your configured BB provider; that provider’s data handling applies. This plugin does not add a separate hosted review service.
 
-## How it works
+GitHub operations use the server’s `gh` credentials. No token needs to be pasted into the plugin. Grant only the repository access your team needs. A shared BB server uses shared server credentials and plugin storage; it is not a multi-tenant review service.
 
-- **`bb review` command** (`bb.cli`) — resolves the target, builds the patch (`gh pr diff` /
-  `git diff`), stores it, and kicks generation.
-- **Generation** — a hidden bb agent runs the bundled `guided-review-generate` skill, reading the
-  diff and submitting the guide through two native tools (`read_review_patch`,
-  `generate_review_guide`) that are exposed *only* to this plugin's own spawned thread
-  (`bb.agents.configure` gated on the origin plugin id).
-- **Store** — a per-plugin SQLite database holds the review, patch, guide, and draft.
-- **Panel ↔ backend** — a typed `bb.rpc` data plane; a `review:<target>` realtime signal tells
-  the panel to refetch when generation finishes.
+Older saved reviews remain available. New reviews use repository-scoped identifiers, preventing equal PR numbers in different repositories from overwriting each other. Legacy inline drafts must be removed and re-added against the current patch before submission.
 
 ## Development
 
 ```sh
-npm test            # vitest (unit + a frontend renderSlot test)
-npx tsc --noEmit    # typecheck
-bb plugin build     # compile dist/ (server + app bundles)
-bb plugin dev       # watch + reload on save
+npm ci
+bb plugin types
+npm run check
+bb plugin install .
+bb plugin dev
 ```
 
-Design and implementation notes live in
-[`docs/superpowers/specs/`](docs/superpowers/specs/) and
-[`docs/superpowers/plans/`](docs/superpowers/plans/).
+Development checks use the SDK test harness, temporary Git repositories, and mocked GitHub writes. Use a Node.js version compatible with the installed `better-sqlite3` package (this release was verified on Node.js 24).
 
-## Roadmap
+Build and commit `dist/` before tagging a release. Keep published tags immutable. Read [CHANGELOG.md](CHANGELOG.md) for release changes.
 
-- Portable single-file HTML export of a guide, and optional end-to-end-encrypted share links
-  (à la plannotator's guides.show). Deferred by choice — the review experience lives in bb today.
+Inspired by [plannotator/guides](https://github.com/plannotator/guides). The viewer and generation workflow here run through BB.

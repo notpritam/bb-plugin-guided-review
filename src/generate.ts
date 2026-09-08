@@ -1,11 +1,17 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Store } from "./store";
 
-export function buildGenerationPrompt(targetKey: string): string {
+const active = new WeakMap<BbPluginApi, Set<AbortController>>();
+export function stopGuideGenerations(bb: BbPluginApi) {
+  for (const controller of active.get(bb) ?? []) controller.abort();
+}
+
+export function buildGenerationPrompt(targetKey: string, generationId?: string): string {
   return [
     "Author a Guided Review for this change.",
     "Follow the guided-review-generate skill exactly.",
     `The target key is: ${targetKey}`,
+    ...(generationId ? [`Pass generationId "${generationId}" to generate_review_guide. It identifies this exact generation run.`] : []),
     "Start by calling read_review_patch, then submit with generate_review_guide.",
   ].join("\n");
 }
@@ -16,26 +22,41 @@ export async function generateGuide(
   targetKey: string,
   projectId: string,
 ): Promise<void> {
+  let generationId: string | undefined;
   let workerId: string | undefined;
+  let threads: BbPluginApi["sdk"]["threads"] | undefined;
+  const controller = new AbortController();
+  const runs = active.get(bb) ?? new Set<AbortController>();
+  active.set(bb, runs);
+  runs.add(controller);
   try {
-    const worker = await bb.sdk.threads.spawn({
+    generationId = store.beginGeneration(targetKey);
+    threads = bb.sdk.threads;
+    const worker = await threads.spawn({
       projectId,
       environment: { type: "project-default" },
-      prompt: buildGenerationPrompt(targetKey),
+      prompt: buildGenerationPrompt(targetKey, generationId),
       title: `Generate guide: ${targetKey}`,
       visibility: "hidden",
     });
     workerId = worker.id;
-    await bb.sdk.threads.wait({ threadId: worker.id, status: "idle" });
+    await threads.wait({ threadId: worker.id, status: "idle", timeoutMs: 600_000, signal: controller.signal });
   } catch {
     // spawn/wait failed — fall through and finalize as error below
   } finally {
-    if (workerId) {
-      await bb.sdk.threads.archive({ threadId: workerId }).catch(() => {});
-      await bb.sdk.threads.stop({ threadId: workerId }).catch(() => {});
+    if (workerId && threads) {
+      try { await threads.archive({ threadId: workerId }); } catch { /* best effort */ }
+      try { await threads.stop({ threadId: workerId }); } catch { /* best effort */ }
     }
+    runs.delete(controller);
   }
-  const ok = store.getGuide(targetKey) !== null;
-  store.setStatus(targetKey, ok ? "ready" : "error");
-  bb.realtime.publish(`review:${targetKey}`, { status: ok ? "ready" : "error" });
+  try {
+    if (!generationId || !store.isCurrentGeneration(targetKey, generationId)) return;
+    const ok = !controller.signal.aborted && store.getGuide(targetKey) !== null;
+    store.setStatus(targetKey, ok ? "ready" : "error");
+    bb.realtime.publish(`review:${targetKey}`, { status: ok ? "ready" : "error" });
+  } catch {
+    // A plugin reload can dispose storage/realtime while a worker is finishing.
+    // The next factory marks interrupted runs as errors without reusing a guide.
+  }
 }

@@ -20,8 +20,9 @@ export function ghSubmitReviewArgs(repo: string, number: number): string[] {
   return ["api", "-X", "POST", `repos/${repo}/pulls/${number}/reviews`, "--input", "-"];
 }
 export function gitDiffArgs(gitRef: string, base?: string): string[] {
-  if (gitRef.includes("..")) return ["diff", gitRef];
-  return base ? ["diff", `${base}...${gitRef}`] : ["diff", gitRef];
+  if (!gitRef || gitRef.startsWith("-") || base?.startsWith("-")) throw new Error("Expected a git ref, not an option.");
+  const range = gitRef.includes("..") ? gitRef : base ? `${base}...${gitRef}` : gitRef;
+  return ["diff", "--no-ext-diff", "--no-textconv", range, "--"];
 }
 export function ghPrChecksJsonArgs(number: number, repo?: string): string[] {
   const a = ["pr", "checks", String(number), "--json", "name,state,bucket,link"];
@@ -58,12 +59,15 @@ interface RunOpts { cwd?: string; stdin?: string }
 interface RunResult { stdout: string; stderr: string; code: number }
 
 function run(bin: string, args: string[], opts: RunOpts = {}): Promise<RunResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { cwd: opts.cwd });
+  return new Promise((resolve) => {
+    // This plugin only accepts github.com targets; ambient GH_HOST must not
+    // redirect REST requests or account selection to an enterprise host.
+    const child = spawn(bin, args, { cwd: opts.cwd, env: { ...process.env, GH_HOST: "github.com", GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" } });
     let stdout = "", stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
-    child.on("error", reject);
+    child.on("error", (error) => resolve({ stdout, stderr: `${bin} could not start: ${error.message}`, code: 1 }));
+    child.stdin.on("error", () => {}); // A failed spawn/early exit can close stdin first.
     child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 1 }));
     if (opts.stdin !== undefined) child.stdin.end(opts.stdin);
     else child.stdin.end();

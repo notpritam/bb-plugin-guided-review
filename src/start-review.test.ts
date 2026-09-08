@@ -34,6 +34,8 @@ import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { createStore } from "./store";
 import { createPrReview } from "./start-review";
 import * as gh from "./gh";
+import { targetKey } from "./targets";
+const key = targetKey({ kind: "pr", number: 7, repo: "acme/web" });
 
 test("createPrReview stores the review + patch and returns ok with a targetKey", async () => {
   const { bb } = createFakePluginHost({
@@ -48,14 +50,14 @@ test("createPrReview stores the review + patch and returns ok with a targetKey",
   );
 
   expect(res.ok).toBe(true);
-  expect(res.targetKey).toBe("pr-7");
+  expect(res.targetKey).toBe(key);
 
-  const meta = store.getReview("pr-7");
+  const meta = store.getReview(key);
   expect(meta?.repo).toBe("acme/web");
   expect(meta?.title).toBe("Fix the thing");
   expect(meta?.headSha).toBe("abc123");
   expect(meta?.projectId).toBe("p1");
-  expect(store.readPatch("pr-7").text).toContain("diff --git a/a.ts");
+  expect(store.readPatch(key).text).toContain("diff --git a/a.ts");
 });
 
 test("createPrReview rejects a non-PR-URL input", async () => {

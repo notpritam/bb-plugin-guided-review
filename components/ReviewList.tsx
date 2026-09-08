@@ -1,6 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { useRpc, useBbNavigate } from "@get-bb/plugin-sdk/app";
-import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import { getLastReview } from "../lib/panel-state";
 import { cn } from "../lib/utils";
@@ -174,17 +173,21 @@ export const ReviewList = memo(function ReviewList() {
   const [loading, setLoading] = useState(true);
   const [input, setInput] = useState("");
   const [starting, setStarting] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setLoadError(false);
     rpc
       .call("listReviews", null)
       .then((r) => {
         if (!cancelled) setReviews(r.reviews as ReviewItem[]);
       })
       .catch(() => {
-        // Non-fatal: the empty state stands in for a failed list fetch.
+        if (!cancelled) setLoadError(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -192,7 +195,7 @@ export const ReviewList = memo(function ReviewList() {
     return () => {
       cancelled = true;
     };
-  }, [rpc]);
+  }, [rpc, reload]);
 
   const sorted = useMemo(
     () => [...reviews].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)),
@@ -217,43 +220,39 @@ export const ReviewList = memo(function ReviewList() {
     const value = input.trim();
     if (!value || starting) return;
     setStarting(true);
+    setStartError(null);
     try {
       const res = await rpc.call("startReview", { input: value });
       if (res.ok && res.targetKey) {
         setInput("");
-        void rpc.call("listReviews", null).then((r) => setReviews(r.reviews as ReviewItem[]));
         open(res.targetKey);
       } else {
-        toast.error(res.error ?? "Couldn't start review");
+        setStartError(res.error ?? "Couldn't start review. Try again.");
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't start review");
+      setStartError(err instanceof Error ? err.message : "Couldn't start review. Try again.");
     } finally {
       setStarting(false);
     }
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 sm:p-6">
+    <div className="flex w-full min-w-0 flex-col gap-5 p-4 sm:p-6">
       <AccountBar />
 
       {/* Hero: title + the PR command bar as the primary action. */}
       <section className="relative overflow-hidden rounded-2xl border border-border bg-card p-5 sm:p-6">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-br from-violet-500/10 via-sky-500/5 to-transparent"
-        />
         <div className="relative space-y-4">
           <div className="flex items-center gap-3">
-            <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500/20 to-sky-500/20 text-violet-600 ring-1 ring-inset ring-border dark:text-violet-300">
+            <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground">
               <Icon name="GitPullRequest" className="size-5" aria-hidden />
             </span>
             <div className="min-w-0">
               <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
                 Guided Review
               </h1>
-              <p className="text-sm text-muted-foreground">
-                Turn a pull request into a chaptered walkthrough you can read and reply to.
+              <p className="max-w-2xl text-sm text-muted-foreground">
+                Understand the change, chapter by chapter. Read the diff, ask questions, and prepare your review.
               </p>
             </div>
           </div>
@@ -273,7 +272,9 @@ export const ReviewList = memo(function ReviewList() {
                 />
                 <Input
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => { setInput(e.target.value); setStartError(null); }}
+                  aria-invalid={!!startError}
+                  aria-describedby={startError ? "review-start-error" : "review-start-help"}
                   placeholder="Paste a GitHub PR URL to review…"
                   aria-label="GitHub PR URL"
                   className="h-11 pl-9 text-sm"
@@ -298,7 +299,8 @@ export const ReviewList = memo(function ReviewList() {
                 )}
               </Button>
             </div>
-            <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+            {startError && <p id="review-start-error" role="alert" className="mt-3 break-words text-sm text-destructive">{startError}</p>}
+            <p id="review-start-help" className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
               <Icon name="Terminal" className="size-3.5 shrink-0" aria-hidden />
               <span>
                 or run{" "}
@@ -309,6 +311,14 @@ export const ReviewList = memo(function ReviewList() {
               </span>
             </p>
           </form>
+          <details className="border-t border-border pt-3 text-sm">
+            <summary className="w-fit cursor-pointer rounded py-1 font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring">First time using Guided Review?</summary>
+            <div className="mt-3 max-w-2xl space-y-2 leading-relaxed text-muted-foreground">
+              <p>Connect a coding-agent provider in BB, then authenticate GitHub CLI on the machine running the BB server with <code className="font-mono text-xs text-foreground">gh auth login</code>.</p>
+              <p>Paste a full pull request URL above. For a local change, run <code className="font-mono text-xs text-foreground">bb review origin/main...HEAD</code> from its repository on that server.</p>
+              <p>Read the chapters and save draft comments. GitHub receives a review only when you choose Submit to GitHub; thread replies and resolve actions are posted when you select those actions.</p>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -317,7 +327,7 @@ export const ReviewList = memo(function ReviewList() {
         <button
           type="button"
           onClick={() => open(lastReview.targetKey)}
-          className="group flex w-full items-center gap-3 rounded-xl border border-border bg-gradient-to-r from-sky-500/10 via-card to-card p-3 text-left transition hover:border-foreground/20 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="group flex w-full items-center gap-3 rounded-xl border border-border bg-card p-3 text-left transition hover:border-foreground/20 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-sky-500/15 text-sky-600 dark:text-sky-300">
             <Icon name="Play" className="size-4" aria-hidden />
@@ -352,6 +362,12 @@ export const ReviewList = memo(function ReviewList() {
               <SkeletonCard key={i} />
             ))}
           </div>
+        </section>
+      ) : loadError ? (
+        <section role="alert" className="rounded-xl border border-border bg-card p-6">
+          <h2 className="font-medium text-foreground">Couldn’t load your reviews</h2>
+          <p className="mt-2 text-sm text-muted-foreground">Your saved reviews haven’t been removed. Check the connection and try again.</p>
+          <Button variant="outline" className="mt-4" onClick={() => setReload((n) => n + 1)}>Try again</Button>
         </section>
       ) : sorted.length === 0 ? (
         <section className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">

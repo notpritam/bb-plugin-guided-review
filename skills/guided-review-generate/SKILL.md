@@ -1,6 +1,6 @@
 ---
 name: guided-review-generate
-description: Author a chaptered Guided Review of a diff for the guided-review plugin. The plugin injects the target key.
+description: Author a chaptered Guided Review of a diff for the guided-review plugin. The plugin supplies the target key and generation ID.
 ---
 
 # Authoring a Guided Review
@@ -20,6 +20,8 @@ You are producing a **guide**: a chaptered walkthrough of a diff. Follow this ex
    trend higher; docs/config trend lower).
 4. **Verify coverage.** Every changed file must appear in exactly one section's `diffs` OR in
    `unplacedFiles` — never twice, never omitted.
-5. **Submit** by calling `generate_review_guide` with `{ targetKey, guide }`. If it returns
-   coverage or validation errors, fix the guide and call it again. Never alter the diff to fit
-   the guide.
+5. **Submit** by calling `generate_review_guide` with `{ targetKey, generationId, guide }`.
+   Copy `targetKey` and `generationId` exactly from this worker’s task. Never invent an ID or
+   reuse one from another run. If the tool reports an expired or superseded generation, stop:
+   a newer worker owns the review. For coverage or validation errors, fix the guide and retry
+   with the same identifiers. Never alter the diff to fit the guide.

@@ -7,6 +7,6 @@ import { ReviewWorkspace } from "./ReviewWorkspace";
 // harness and by the production plugin-app-collector.
 export function ReviewPanel({ subPath }: { subPath: string }) {
   const targetKey = subPath.split("/")[0] ?? "";
-  return targetKey ? <ReviewWorkspace targetKey={targetKey} /> : <ReviewList />;
+  return targetKey ? <ReviewWorkspace key={targetKey} targetKey={targetKey} /> : <ReviewList />;
 }
 ReviewPanel.displayName = "ReviewPanel";

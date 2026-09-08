@@ -26,3 +26,17 @@ test("targetKey is stable and kind-prefixed", () => {
   expect(a).toBe(b);
   expect(a.startsWith("ref-")).toBe(true);
 });
+
+test("different repositories and local workspaces never share review or draft keys", () => {
+  const first = targetKey({ kind: "pr", repo: "acme/web", number: 7 });
+  expect(first).not.toBe(targetKey({ kind: "pr", repo: "acme/api", number: 7 }));
+  expect(first).toBe(targetKey({ kind: "pr", repo: "ACME/Web", number: 7 }));
+  expect(first).toMatch(/^[a-z0-9-]+$/);
+  const ref = { kind: "ref" as const, gitRef: "HEAD" };
+  expect(targetKey(ref, { projectId: "p1", cwd: "/a" })).not.toBe(targetKey(ref, { projectId: "p1", cwd: "/b" }));
+  expect(targetKey(ref, { projectId: "p1", cwd: "/a" })).not.toBe(targetKey(ref, { projectId: "p2", cwd: "/a" }));
+});
+
+test.each(["https://evilgithub.com/acme/web/pull/7", "https://example.com/github.com/acme/web/pull/7", "https://github.com/acme/web/pull/7oops", "https://github.com/acme/web/pull/0"])("rejects misleading PR URL %s", (url) => {
+  expect(parseTarget(url).kind).toBe("ref");
+});

@@ -3,7 +3,7 @@ import type { Store } from "./store";
 import { parseTarget, targetKey } from "./targets";
 import { ensureGitHeaders } from "./patch";
 import { generateGuide } from "./generate";
-import { ghPrViewArgs, ghPrDiffArgs } from "./gh";
+import { readPrSnapshot } from "./pr-snapshot";
 
 interface Deps {
   bb: BbPluginApi;
@@ -29,18 +29,13 @@ export async function createPrReview(
     };
   }
 
-  const view = await deps.gh.runGh(ghPrViewArgs(target.number, target.repo));
-  if (view.code !== 0) return { ok: false, error: ghError(view.stderr) };
-  let pr: any;
+  let snapshot: Awaited<ReturnType<typeof readPrSnapshot>>;
   try {
-    pr = JSON.parse(view.stdout);
-  } catch {
-    return { ok: false, error: "Unexpected gh output (could not parse JSON)." };
+    snapshot = await readPrSnapshot(deps.gh.runGh, target.number, target.repo);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Could not load the PR." };
   }
-
-  const diff = await deps.gh.runGh(ghPrDiffArgs(target.number, target.repo));
-  if (diff.code !== 0) return { ok: false, error: ghError(diff.stderr) };
-  if (!diff.stdout.trim()) return { ok: false, error: "No changes found for that PR." };
+  const { pr, patch } = snapshot;
 
   const key = targetKey(target);
   const now = Date.now();
@@ -61,17 +56,10 @@ export async function createPrReview(
     status: "generating",
     createdAt: now,
   });
-  deps.store.savePatch(key, ensureGitHeaders(diff.stdout));
+  deps.store.savePatch(key, ensureGitHeaders(patch));
 
   // Fire-and-forget generation; the panel refetches on the realtime signal.
-  void generateGuide(deps.bb, deps.store, key, args.projectId).catch(() => deps.store.setStatus(key, "error"));
+  void generateGuide(deps.bb, deps.store, key, args.projectId);
 
   return { ok: true, targetKey: key };
-}
-
-function ghError(stderr: string): string {
-  if (/gh auth login|not logged|authentication|bad credentials|http 401/i.test(stderr)) {
-    return "GitHub CLI is not authenticated. Run `gh auth login` (needs `repo` scope), then retry.";
-  }
-  return stderr || "gh command failed";
 }

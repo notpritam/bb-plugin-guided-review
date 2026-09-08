@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { Skeleton } from "./ui/skeleton";
 import { Icon } from "./ui/icon";
+import { Button } from "./ui/button";
 
 /**
  * Loading placeholder for the review workspace — mirrors the real layout
@@ -10,7 +11,7 @@ import { Icon } from "./ui/icon";
  */
 export const ReviewSkeleton = memo(function ReviewSkeleton() {
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full min-w-0 flex-col bg-background" role="status" aria-label="Building the review guide">
       {/* Header */}
       <div className="space-y-2 border-b border-border p-3">
         <div className="flex items-center gap-2">
@@ -22,7 +23,7 @@ export const ReviewSkeleton = memo(function ReviewSkeleton() {
 
       <div className="flex min-h-0 flex-1">
         {/* Chapter sidebar */}
-        <aside className="w-72 shrink-0 space-y-3 border-r border-border p-3">
+        <aside className="hidden w-72 shrink-0 space-y-3 border-r border-border p-3 md:block">
           {Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="space-y-1.5">
               <Skeleton className="h-4" style={{ width: `${70 - i * 6}%` }} />
@@ -67,17 +68,17 @@ export const ReviewSkeleton = memo(function ReviewSkeleton() {
 ReviewSkeleton.displayName = "ReviewSkeleton";
 
 /** Terminal error state when generation failed. */
-export const ReviewError = memo(function ReviewError() {
+export const ReviewError = memo(function ReviewError({ title = "Generation failed", message = "The guide could not be completed. Check your coding-agent provider and try rebuilding it.", onRetry, onBack, busy = false }: { title?: string; message?: string; onRetry?: () => void; onBack?: () => void; busy?: boolean }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
-      <div className="flex size-11 items-center justify-center rounded-full bg-destructive/10 text-destructive">
-        <Icon name="AlertTriangle" className="size-5" aria-hidden />
+    <div role="alert" className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
+      <Icon name="AlertTriangle" className="size-6 text-destructive" aria-hidden />
+      <div className="max-w-lg space-y-2">
+        <h2 className="text-base font-medium text-foreground">{title}</h2>
+        <p className="break-words text-sm leading-relaxed text-muted-foreground">{message}</p>
       </div>
-      <div className="space-y-1">
-        <p className="text-sm font-medium text-foreground">Generation failed</p>
-        <p className="text-xs text-muted-foreground">
-          Re-run <code className="rounded bg-muted px-1 py-0.5">bb review</code> to rebuild the guide.
-        </p>
+      <div className="flex flex-wrap justify-center gap-2">
+        {onRetry && <Button disabled={busy} onClick={onRetry}>{busy ? "Rebuilding…" : "Try again"}</Button>}
+        {onBack && <Button variant="outline" onClick={onBack}>All reviews</Button>}
       </div>
     </div>
   );

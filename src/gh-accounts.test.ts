@@ -57,12 +57,12 @@ test("getGhAccounts returns active:null when the user lookup fails", async () =>
   expect(res.accounts.every((a) => !a.active)).toBe(true);
 });
 
-test("switchGhAccount calls `gh auth switch --user <login>` and reports the new active login", async () => {
-  const runGh = vi.fn(async () => ({ stdout: "", stderr: "", code: 0 }));
+test("switchGhAccount pins github.com and verifies the new active login", async () => {
+  const runGh = vi.fn(async () => ({ stdout: "octocat\n", stderr: "", code: 0 }));
 
   const res = await switchGhAccount(runGh as any, "octocat");
 
-  expect(runGh).toHaveBeenCalledWith(["auth", "switch", "--user", "octocat"]);
+  expect(runGh).toHaveBeenCalledWith(["auth", "switch", "--hostname", "github.com", "--user", "octocat"]);
   expect(res).toEqual({ ok: true, active: "octocat" });
 });
 
@@ -104,4 +104,18 @@ test("checkRepoAccess reports accessible:true when the repo lookup succeeds", as
   const res = await checkRepoAccess(runGh as any, "acme/web");
 
   expect(res).toEqual({ accessible: true, repo: "acme/web", account: "monalisa" });
+});
+
+test("environment-token accounts are shown even when not in the saved account list", async () => {
+  const runGh = vi.fn(async (args: string[]) => ({ stdout: args[0] === "api" ? "ci-bot\n" : "", stderr: STATUS_SAMPLE, code: 0 }));
+  const result = await getGhAccounts(runGh);
+  expect(result.accounts[0]).toEqual({ login: "ci-bot", active: true });
+  expect(runGh).toHaveBeenCalledWith(["auth", "status", "--hostname", "github.com"]);
+});
+
+test("a token override cannot falsely report a successful account switch", async () => {
+  const runGh = vi.fn(async (args: string[]) => ({ stdout: args[0] === "api" ? "ci-bot\n" : "", stderr: "", code: 0 }));
+  const result = await switchGhAccount(runGh, "octocat");
+  expect(result).toMatchObject({ ok: false, active: "ci-bot" });
+  expect(result.error).toContain("GH_TOKEN");
 });

@@ -1,9 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRpc, useRealtime } from "@get-bb/plugin-sdk/app";
+import { useRpc, useRealtime, useBbNavigate } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { SelectedLineRange } from "@pierre/diffs";
 import type { rpcContract } from "../src/rpc-contract";
 import { cn } from "../lib/utils";
+import { experimental_useCodeTheme } from "@get-bb/plugin-sdk/app";
+import { useMediaQuery } from "./ui/hooks/use-media-query";
 import { getReviewState, patchReviewState, setLastReview } from "../lib/panel-state";
 import { Button } from "./ui/button";
 import { Icon } from "./ui/icon";
@@ -21,6 +23,15 @@ const SIDEBAR_MAX = 560;
 
 export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { targetKey: string }) {
   const rpc = useRpc<typeof rpcContract>();
+  const navigate = useBbNavigate();
+  const codeTheme = experimental_useCodeTheme();
+  const compact = useMediaQuery("(max-width: 767px)");
+  const [mobileChapters, setMobileChapters] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [rebuilding, setRebuilding] = useState(false);
+  const request = useRef(0);
+  const resizeCleanup = useRef<(() => void) | null>(null);
   const persisted = useMemo(() => getReviewState(targetKey), [targetKey]);
 
   const [review, setReview] = useState<any>(null);
@@ -64,38 +75,52 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     }
   }, [rpc, targetKey]);
 
-  const load = useMemo(
-    () => async () => {
-      try {
-        const [{ review }, { guide }, { patch }, checksRes] = await Promise.all([
-          rpc.call("getReview", { targetKey }),
-          rpc.call("getGuide", { targetKey }),
-          rpc.call("getPatch", { targetKey }),
-          rpc.call("getChecks", { targetKey }),
-        ]);
-        setReview(review);
-        setGuide(guide);
-        setPatch(patch);
-        setChecks(checksRes);
-        if (guide?.sections?.length) {
-          const saved = getReviewState(targetKey).activeId;
-          const exists = saved && guide.sections.some((s: any) => s.id === saved);
-          setActiveId((prev) => prev || (exists ? saved! : guide.sections[0].id));
-        }
-        void loadViews();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to load review");
+  const load = useCallback(async () => {
+    const id = ++request.current;
+    setLoadError(null);
+    try {
+      const [{ review }, { guide }, { patch }, checksRes] = await Promise.all([
+        rpc.call("getReview", { targetKey }),
+        rpc.call("getGuide", { targetKey }),
+        rpc.call("getPatch", { targetKey }),
+        rpc.call("getChecks", { targetKey }).catch(() => null),
+      ]);
+      if (id !== request.current) return;
+      setReview(review);
+      setGuide(guide);
+      setPatch(patch);
+      setChecks(checksRes);
+      if (guide?.sections?.length) {
+        const saved = getReviewState(targetKey).activeId;
+        setActiveId((prev) => guide.sections.some((section: any) => section.id === prev)
+          ? prev : guide.sections.some((section: any) => section.id === saved) ? saved! : guide.sections[0].id);
       }
-    },
-    [rpc, targetKey, loadViews],
-  );
+      void loadViews();
+    } catch (err) {
+      if (id === request.current) setLoadError(err instanceof Error ? err.message : "Check the connection and try again.");
+    } finally {
+      if (id === request.current) setLoading(false);
+    }
+  }, [rpc, targetKey, loadViews]);
 
   useEffect(() => {
     void load();
+    return () => { request.current++; resizeCleanup.current?.(); };
   }, [load]);
-  useRealtime(`review:${targetKey}`, () => {
-    void load();
-  });
+  useRealtime(`review:${targetKey}`, () => { void load(); });
+
+  async function rebuild() {
+    if (rebuilding) return;
+    setRebuilding(true);
+    setLoadError(null);
+    try {
+      const result = await rpc.call("rereview", { targetKey });
+      if (!result.ok) setLoadError(result.error ?? "Couldn’t rebuild the guide.");
+      else await load();
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Couldn’t rebuild the guide.");
+    } finally { setRebuilding(false); }
+  }
 
   const checkAccess = useMemo(
     () => async () => {
@@ -125,7 +150,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
 
   const toggleFullscreen = useCallback(() => {
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
-    else void rootRef.current?.requestFullscreen().catch(() => {});
+    else if (rootRef.current?.requestFullscreen) void rootRef.current.requestFullscreen().catch(() => {});
   }, []);
 
   const activeFiles: string[] = useMemo(() => {
@@ -187,6 +212,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         scrollToFile(file);
       }
       setCurrentFile(file);
+      setMobileChapters(false);
     },
     [activeId, scrollToFile],
   );
@@ -201,6 +227,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
 
   // Persist scroll (debounced) and track the file nearest the viewport top.
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (scrollSaveTimer.current) clearTimeout(scrollSaveTimer.current); }, []);
   const onScroll = useCallback(() => {
     const box = scrollBox.current;
     if (!box) return;
@@ -273,6 +300,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   // Sidebar resize drag.
   function startSidebarResize(e: React.PointerEvent) {
     e.preventDefault();
+    resizeCleanup.current?.();
     const startX = e.clientX;
     const startW = sidebarWidth;
     function onMove(ev: PointerEvent) {
@@ -282,13 +310,22 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     function onUp() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      resizeCleanup.current = null;
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    resizeCleanup.current = onUp;
   }
 
   if (!guide) {
-    return review?.status === "error" ? <ReviewError /> : <ReviewSkeleton />;
+    const back = () => navigate.toPluginPanel("review");
+    if (loadError) return <ReviewError title="Couldn’t load this review" message={loadError} onRetry={() => void load()} onBack={back} />;
+    if (loading) return <ReviewSkeleton />;
+    if (!review) return <ReviewError title="Review not found" message="This review may have been removed. Return to your reviews or refresh the connection." onRetry={() => void load()} onBack={back} />;
+    if (review.status === "error") return <ReviewError onRetry={() => void rebuild()} onBack={back} busy={rebuilding} />;
+    return <ReviewSkeleton />;
   }
 
   const viewedCount = activeFiles.filter((f) => views.get(f)?.viewed).length;
@@ -299,11 +336,13 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         rootRef.current = el;
         setRootEl(el);
       }}
-      className="flex h-full flex-col bg-background"
+      className="flex h-full min-h-0 min-w-0 flex-col bg-background"
     >
+      {loadError && <div role="alert" className="flex flex-wrap items-center gap-3 border-b border-border p-3 text-sm text-destructive"><span>{loadError}</span><Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button></div>}
+      <div className="border-b border-border px-3 py-1"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel("review")}><Icon name="ArrowRight" className="size-4 rotate-180" aria-hidden /> All reviews</Button></div>
       {/* Header — full when reviewing normally, slim in focus mode. */}
       {focus ? (
-        <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
           <Icon name="GitPullRequest" className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {review?.title ?? guide.title ?? targetKey}
@@ -329,48 +368,58 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           Re-review failed — showing the previous guide. Try again.
         </p>
       )}
-      <div className="flex min-h-0 flex-1">
-        {!sidebarCollapsed && (
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        {(compact ? mobileChapters : !sidebarCollapsed) && (
           <>
             <aside
-              className="shrink-0 overflow-y-auto border-r border-border p-2"
-              style={{ width: sidebarWidth }}
+              className="max-h-[40vh] shrink-0 overflow-y-auto border-b border-border p-2 md:max-h-none md:border-b-0 md:border-r"
+              style={{ width: compact ? "100%" : sidebarWidth }}
             >
               <ChapterNav
                 sections={guide.sections}
                 activeId={activeId}
-                onSelect={setActiveId}
+                onSelect={(id) => { setActiveId(id); setMobileChapters(false); }}
                 views={views}
                 onSelectFile={onSelectFile}
               />
             </aside>
-            <div
+            {!compact && <div
+              tabIndex={0}
+              aria-valuemin={SIDEBAR_MIN}
+              aria-valuemax={SIDEBAR_MAX}
+              aria-valuenow={sidebarWidth}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                setSidebarWidth((width) => event.key === "Home" ? SIDEBAR_MIN : event.key === "End" ? SIDEBAR_MAX : Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, width + (event.key === "ArrowRight" ? 20 : -20))));
+              }}
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize sidebar"
               onPointerDown={startSidebarResize}
-              className="w-1 shrink-0 cursor-col-resize bg-border/40 hover:bg-foreground/30"
-            />
+              className="w-1 shrink-0 cursor-col-resize bg-border/40 hover:bg-foreground/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+            />}
           </>
         )}
         <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-          <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
             <Button
               variant="ghost"
               size="sm"
-              aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-              aria-pressed={sidebarCollapsed}
-              className="h-6 px-1.5"
-              onClick={() => setSidebarCollapsed((c) => !c)}
+              aria-label={(compact ? !mobileChapters : sidebarCollapsed) ? "Show chapters" : "Hide chapters"}
+              aria-pressed={compact ? mobileChapters : !sidebarCollapsed}
+              className="h-9 md:h-7 px-1.5"
+              onClick={() => compact ? setMobileChapters((value) => !value) : setSidebarCollapsed((value) => !value)}
             >
               <Icon name="AlignLeft" className="size-4" aria-hidden />
+              {compact && "Chapters"}
             </Button>
             <div className="inline-flex items-center gap-0.5 rounded-md border border-border p-0.5">
               <Button
                 variant="ghost"
                 size="sm"
                 aria-pressed={view === "diff"}
-                className={cn("h-6 px-2 text-xs", view === "diff" && "bg-muted")}
+                className={cn("h-9 md:h-7 px-2 text-xs", view === "diff" && "bg-muted")}
                 onClick={() => setView("diff")}
               >
                 Diff
@@ -379,13 +428,13 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 variant="ghost"
                 size="sm"
                 aria-pressed={view === "threads"}
-                className={cn("h-6 px-2 text-xs", view === "threads" && "bg-muted")}
+                className={cn("h-9 md:h-7 px-2 text-xs", view === "threads" && "bg-muted")}
                 onClick={() => setView("threads")}
               >
                 Threads
               </Button>
             </div>
-            <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground md:ml-auto">
               {view === "diff" && activeFiles.length > 0 && (
                 <>
                   <span>
@@ -394,7 +443,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-6 px-2 text-xs"
+                    className="h-9 md:h-7 px-2 text-xs"
                     disabled={viewedCount === activeFiles.length}
                     onClick={markAllViewed}
                   >
@@ -409,7 +458,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 size="sm"
                 aria-label="Focus mode"
                 aria-pressed={focus}
-                className={cn("h-6 px-2 text-xs", focus && "bg-muted")}
+                className={cn("h-9 md:h-7 px-2 text-xs", focus && "bg-muted")}
                 onClick={() => setFocus((f) => !f)}
               >
                 <Icon name="Minimize2" className="size-3.5" aria-hidden />
@@ -420,7 +469,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 size="sm"
                 aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
                 aria-pressed={isFullscreen}
-                className="h-6 px-2 text-xs"
+                className="h-9 md:h-7 px-2 text-xs"
                 onClick={toggleFullscreen}
               >
                 <Icon name={isFullscreen ? "Minimize2" : "Maximize2"} className="size-3.5" aria-hidden />
@@ -431,6 +480,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           <div ref={scrollBox} onScroll={onScroll} onMouseUp={onMouseUp} className="min-h-0 flex-1 overflow-y-auto p-4">
             {view === "diff" ? (
               <DiffViewer
+                themeMode={codeTheme.mode}
                 patch={patch}
                 files={activeFiles}
                 views={views}
@@ -444,11 +494,11 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           </div>
         </main>
       </div>
-      <DraftTray targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill} />
+      <DraftTray isLocal={review?.kind === "ref"} targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill} />
 
       {/* Line-selection action bar — GitHub-style: pick lines, then act. */}
       {lineSel && (
-        <div className="fixed bottom-24 left-1/2 z-[62] flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-2xl">
+        <div className="fixed bottom-24 left-1/2 z-[62] flex w-max max-w-[calc(100vw-24px)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-2xl">
           <span className="text-muted-foreground">
             {lineSel.file.split("/").pop()}
             <span className="text-foreground">
@@ -458,11 +508,11 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
             </span>
           </span>
           <span className="h-4 w-px bg-border" />
-          <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-xs" onClick={commentOnLines}>
+          <Button size="sm" variant="ghost" className="h-9 md:h-7 gap-1 px-2 text-xs" onClick={commentOnLines}>
             <Icon name="BubbleChatQuestion" className="size-3.5" aria-hidden />
             Add comment
           </Button>
-          <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-xs" onClick={askAboutLines}>
+          <Button size="sm" variant="ghost" className="h-9 md:h-7 gap-1 px-2 text-xs" onClick={askAboutLines}>
             <Icon name="AiContentGenerator01" className="size-3.5" aria-hidden />
             Ask agent
           </Button>

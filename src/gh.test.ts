@@ -49,8 +49,8 @@ test("submit review posts to the reviews endpoint reading json from stdin", () =
 });
 
 test("git diff builds a range", () => {
-  expect(gitDiffArgs("feature/x", "main")).toEqual(["diff", "main...feature/x"]);
-  expect(gitDiffArgs("main...HEAD")).toEqual(["diff", "main...HEAD"]);
+  expect(gitDiffArgs("feature/x", "main")).toEqual(["diff", "--no-ext-diff", "--no-textconv", "main...feature/x", "--"]);
+  expect(gitDiffArgs("main...HEAD")).toEqual(["diff", "--no-ext-diff", "--no-textconv", "main...HEAD", "--"]);
 });
 
 test("pr checks json requests the fields we need, with optional -R", () => {

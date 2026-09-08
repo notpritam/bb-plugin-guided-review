@@ -6,6 +6,7 @@ import { splitPatchByFile } from "../src/patch";
 import { cn } from "../lib/utils";
 import { Icon } from "./ui/icon";
 import { FileTag } from "./FileTag";
+import { useMediaQuery } from "./ui/hooks/use-media-query";
 
 export interface FileViewFlags {
   viewed: boolean;
@@ -38,7 +39,9 @@ export const DiffViewer = memo(function DiffViewer({
   onToggleViewed,
   registerFileEl,
   onLineSelected,
+  themeMode,
 }: {
+  themeMode?: "light" | "dark";
   patch: string;
   files: string[];
   views: Map<string, FileViewFlags>;
@@ -47,6 +50,7 @@ export const DiffViewer = memo(function DiffViewer({
   onLineSelected?: (file: string, range: SelectedLineRange | null) => void;
 }) {
   const theme = useTheme();
+  const compact = useMediaQuery("(max-width: 767px)");
   const perFile = useMemo(() => {
     return splitPatchByFile(patch)
       .filter((f) => files.includes(f.path))
@@ -131,6 +135,8 @@ export const DiffViewer = memo(function DiffViewer({
                   fileDiff={fileDiff!}
                   options={{
                     ...(theme ? { theme } : {}),
+                    themeType: themeMode,
+                    diffStyle: compact ? "unified" : "split",
                     // GitHub-style line picking: drag to select a range, or use
                     // the gutter "+". Uncontrolled — pierre paints the highlight;
                     // we just capture the range to offer comment / ask-agent.

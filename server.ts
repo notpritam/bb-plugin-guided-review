@@ -17,7 +17,6 @@ import {
   ghPrViewArgs,
   ghPrCommentsArgs,
   ghPrChecksJsonArgs,
-  ghSubmitReviewArgs,
   ghReviewThreadsArgs,
   ghReplyThreadArgs,
   ghResolveThreadArgs,
@@ -27,8 +26,8 @@ import {
   runGit,
   ghErrorMessage,
 } from "./src/gh";
-import { toGithubReviewPayload } from "./src/draft";
-import { invalidComments } from "./src/review-positions";
+import { createReviewSubmitter } from "./src/submit-review";
+import { stopGuideGenerations } from "./src/generate";
 import { parseChecks, parseReviewThreads } from "./src/threads";
 import { rerunReview } from "./src/rereview";
 import { getGhAccounts, switchGhAccount, checkRepoAccess } from "./src/gh-accounts";
@@ -37,6 +36,9 @@ export { rpcContract } from "./src/rpc-contract";
 
 export default async function plugin(bb: BbPluginApi) {
   const store = createStore(bb);
+  store.interruptGenerations();
+  const submitReview = createReviewSubmitter(store, runGh);
+  bb.onDispose(() => stopGuideGenerations(bb));
 
   bb.log.info("guided-review loaded");
 
@@ -94,7 +96,7 @@ export default async function plugin(bb: BbPluginApi) {
       const m = store.getReview(targetKey);
       if (!m || m.kind !== "pr" || !m.number) return { bucket: "none", checks: [] };
       const r = await runGh(ghPrChecksJsonArgs(m.number, m.repo));
-      const parsed = parseChecks(r.code === 0 ? r.stdout : "");
+      const parsed = parseChecks([0, 1, 8].includes(r.code) ? r.stdout : "");
       return { bucket: parsed.bucket, checks: parsed.checks };
     },
 
@@ -131,7 +133,8 @@ export default async function plugin(bb: BbPluginApi) {
       } catch {
         return { hasNewCommits: false };
       }
-      return { hasNewCommits: !!m.headSha && head.headRefOid !== m.headSha, current: head.headRefOid, stored: m.headSha };
+      if (typeof head?.headRefOid !== "string") return { hasNewCommits: false };
+      return { hasNewCommits: !!m.headSha && head.headRefOid !== m.headSha, current: head.headRefOid, ...(m.headSha ? { stored: m.headSha } : {}) };
     },
     async rereview({ targetKey }) {
       return rerunReview({ bb, store, gh: { runGh, runGit } }, targetKey);
@@ -151,33 +154,7 @@ export default async function plugin(bb: BbPluginApi) {
       return { draft: store.setVerdict(targetKey, verdict, body) };
     },
     async submitReview({ targetKey }) {
-      const m = store.getReview(targetKey);
-      if (!m || m.kind !== "pr" || !m.number || !m.repo) {
-        return { ok: false, error: "Submitting requires a GitHub PR target." };
-      }
-      const draft = store.getDraft(targetKey);
-      // GitHub rejects an empty Comment review outright.
-      if (draft.verdict === "COMMENT" && !draft.body.trim() && draft.comments.length === 0) {
-        return { ok: false, error: "Add a summary or at least one comment before submitting a Comment review." };
-      }
-      // Validate comment positions against the diff so we don't send a payload
-      // GitHub will 422 on (line not part of the diff / wrong side / stale file).
-      const total = store.readPatch(targetKey, 0, 0).total;
-      const patch = store.readPatch(targetKey, 0, total).text;
-      const bad = invalidComments(patch, draft.comments);
-      if (bad.length) {
-        const list = bad.map((c) => `${c.file}:${c.line}`).join(", ");
-        return {
-          ok: false,
-          error: `These comments aren't on lines in the current diff, so GitHub would reject the review: ${list}. Edit or remove them (a re-review may have moved the code), then resubmit.`,
-        };
-      }
-      const r = await runGh(ghSubmitReviewArgs(m.repo, m.number), { stdin: JSON.stringify(toGithubReviewPayload(draft)) });
-      if (r.code !== 0) {
-        bb.log.warn(`gh review submit failed: ${r.stderr?.trim()} | body: ${r.stdout?.trim()}`);
-        return { ok: false, error: ghErrorMessage(r) };
-      }
-      return { ok: true };
+      return submitReview(targetKey);
     },
 
     // Feature 1: per-file "Viewed" state (viewed/stale computed against the patch)
@@ -251,8 +228,11 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "generate_review_guide",
     description: "Submit the authored guide. Validates shape and coverage.",
-    parameters: z.object({ targetKey: z.string(), guide: z.unknown() }),
-    async execute({ targetKey, guide }) {
+    parameters: z.object({ targetKey: z.string(), generationId: z.string(), guide: z.unknown() }),
+    async execute({ targetKey, generationId, guide }) {
+      if (!store.isCurrentGeneration(targetKey, generationId) || store.getReview(targetKey)?.status !== "generating") {
+        return { content: [{ type: "text", text: "This generation was superseded or interrupted. Do not overwrite the current review." }], isError: true };
+      }
       const v = validateGuide(guide);
       if (!v.ok) return { content: [{ type: "text", text: "Invalid guide:\n" + v.errors.join("\n") }], isError: true };
       const total = store.readPatch(targetKey, 0, 0).total;
