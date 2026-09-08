@@ -16,7 +16,7 @@ gh auth setup-git
 bb plugin install git:https://github.com/notpritam/bb-plugin-guided-review.git@v0.1.0
 ```
 
-The tagged release includes compiled bundles; teammates do not need Node.js, npm, or a build step. If GitHub reports this repository is unavailable, check that the signed-in account has team repository access.
+The tagged release includes compiled bundles; teammates do not need Node.js, npm, or a build step. If GitHub reports this repository is unavailable, check that the account used by the BB server has team repository access. On a server with several saved accounts, confirm the active account with `gh auth status`. Tokens inherited by the running server override saved-account selection; restart BB after changing its environment credentials.
 
 1. Open **Guided Review** in BB’s sidebar.
 2. Check the GitHub account shown at the top. Switching accounts affects `gh` on this BB server, including other work that uses it. Environment-token overrides are detected and must be removed before switching saved accounts.
