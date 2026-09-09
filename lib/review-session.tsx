@@ -15,11 +15,23 @@ export function useReviewSession() {
     setClientId(id);
     setReady(false); setError("");
     const opened = rpc.call("setReviewPresence", { clientId: id, open: true });
+    const pagehide = (event: PageTransitionEvent) => {
+      // A cached page still owns its editors. A real reload/close releases the
+      // lease using a small same-origin request that survives document unload.
+      if (event.persisted) return;
+      const url = "/api/v1/plugins/guided-review/rpc/setReviewPresence";
+      const body = JSON.stringify({ clientId: id, open: false });
+      if (!navigator.sendBeacon?.(url, new Blob([body], { type: "application/json" }))) {
+        void fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true, credentials: "same-origin" }).catch(() => {});
+      }
+    };
+    window.addEventListener("pagehide", pagehide);
     void opened.then(() => { if (!closed) setReady(true); }).catch(() => {
       if (!closed) setError("Couldn’t open the review session. The plugin may be updating. Try again.");
     });
     return () => {
       closed = true;
+      window.removeEventListener("pagehide", pagehide);
       void opened.catch(() => {}).then(() => rpc.call("setReviewPresence", { clientId: id, open: false })).catch(() => {});
     };
   }, [rpc, attempt]);
