@@ -35,6 +35,7 @@ import { parseChecks, parseReviewThreads } from "./src/threads";
 import { rerunReview } from "./src/rereview";
 import { getGhAccounts, switchGhAccount, checkRepoAccess } from "./src/gh-accounts";
 
+import { completionNotifications } from "./src/completion-notifications";
 import { createPluginUpdates } from "./src/plugin-updates";
 
 export { rpcContract } from "./src/rpc-contract";
@@ -44,11 +45,13 @@ export default async function plugin(bb: BbPluginApi) {
   store.interruptGenerations();
   const submitReview = createReviewSubmitter(store, runGh);
   const sync = createReviewSync(bb, store, runGh);
+  const notifications = completionNotifications(bb, store);
   const updates = createPluginUpdates(bb, () => hasGuideGenerations(bb) || hasReviewAgents(bb));
   bb.background.service("plugin-updates", {
     async start(signal) {
       while (!signal.aborted) {
         await delay(60_000, undefined, { signal }).catch(() => {});
+        if (!signal.aborted) await updates.run(() => notifications.flush(), false).catch(() => {});
         if (!signal.aborted) await updates.tick().catch(() => {});
       }
     },

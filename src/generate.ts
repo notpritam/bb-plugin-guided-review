@@ -1,5 +1,6 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Store } from "./store";
+import { completionNotifications } from "./completion-notifications";
 import { defaultPreferences, guidePreferencesPrompt, type ReviewPreferences } from "./preferences";
 
 const active = new WeakMap<BbPluginApi, Set<AbortController>>();
@@ -51,15 +52,20 @@ export async function generateGuide(
       try { await threads.archive({ threadId: workerId }); } catch { /* best effort */ }
       try { await threads.stop({ threadId: workerId }); } catch { /* best effort */ }
     }
-    runs.delete(controller);
   }
   try {
     if (!generationId || !store.isCurrentGeneration(targetKey, generationId)) return;
     const ok = !controller.signal.aborted && store.getGuide(targetKey) !== null;
     store.setStatus(targetKey, ok ? "ready" : "error");
     bb.realtime.publish(`review:${targetKey}`, { status: ok ? "ready" : "error" });
+    bb.realtime.publish("reviews", { ts: Date.now() });
+    if (!controller.signal.aborted) await completionNotifications(bb, store).queue({
+      targetKey, generationId, projectId, status: ok ? "ready" : "error",
+    });
   } catch {
     // A plugin reload can dispose storage/realtime while a worker is finishing.
     // The next factory marks interrupted runs as errors without reusing a guide.
+  } finally {
+    runs.delete(controller);
   }
 }

@@ -2,7 +2,7 @@
 
 An agent-authored walkthrough of a GitHub pull request or local Git change, inside [BB](https://getbb.app). Read the change in chapters, inspect the diff, ask questions, and prepare your review in one workspace.
 
-**v0.2.0.** Each reviewer uses their own BB installation and GitHub identity. On a shared BB server, credentials, settings, and saved reviews are shared.
+**v0.2.1.** Each reviewer uses their own BB installation and GitHub identity. On a shared BB server, credentials, settings, and saved reviews are shared.
 
 ## Install and first run
 
@@ -113,3 +113,18 @@ BB_E2E_URL=http://127.0.0.1:4331 npm test -- --project e2e
 ```
 
 The browser uses the running BB shell and built plugin UI. Guided Review RPC requests are intercepted into the official SDK test host with real temporary SQLite. GitHub and agent calls are stubbed at their external boundaries, so no real PR review or agent thread is created. The flow covers settings persistence, draft-comment editing, public summaries, private-note isolation, fullscreen verdict buttons, submission, reload, plugin-only chat with file context, sidebar collapse/persistence, keyboard tooltips, panel/widget draft preservation, archived-worker replacement, merge archival, and desktop/390px mobile layouts. Without `BB_E2E_URL`, this test is skipped.
+
+
+## Guide-ready notifications
+
+With **Needs You 0.2.0-beta.3+** installed, a finished guide appears in your Needs
+You inbox with an **Open review** action. Failed generation has its own recovery
+message. Re-review updates the same item; hidden worker threads do not create
+extra alerts. Enable **Needs You → Settings → Extension activity** to receive
+popups, desktop alerts, or optional Telegram pushes through your chosen channels.
+Quiet hours apply, and a popup stays quiet while you are already viewing that guide.
+
+Needs You is optional. If it is disabled, missing, or restarting, Guided Review
+keeps the guide successful and retries the same completion event once a minute
+for up to 24 hours while loaded. Restarting preserves queued outcomes. A newer
+generation supersedes the previous queued result; cancelled workers never ping.

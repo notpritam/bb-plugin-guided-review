@@ -224,8 +224,12 @@ export function createStore(bb: BbPluginApi): Store {
       return (db.prepare(`SELECT generation_id FROM generations WHERE target_key=?`).get(k) as any)?.generation_id === id;
     },
     interruptGenerations() {
-      db.prepare(`UPDATE reviews SET status='error' WHERE status='generating'`).run();
-      db.prepare(`DELETE FROM generations`).run();
+      db.transaction(() => {
+        // Completed identities are also durable notification receipts. Only
+        // workers interrupted by this reload lose the right to finalize.
+        db.prepare(`DELETE FROM generations WHERE target_key IN (SELECT target_key FROM reviews WHERE status='generating')`).run();
+        db.prepare(`UPDATE reviews SET status='error' WHERE status='generating'`).run();
+      })();
     },
     getDraft(k) {
       const row: any = db.prepare(`SELECT * FROM drafts WHERE target_key=?`).get(k);

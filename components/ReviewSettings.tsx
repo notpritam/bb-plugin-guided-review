@@ -48,6 +48,11 @@ export function ReviewSettings({ onBack }: { onBack?: () => void }) {
       </div>
       <SetupReadiness />
       <ReleaseSettings clientId={session.clientId} disabled={dirty || busy} onUpdatingChange={setUpdating} />
+      <section className="space-y-2 border-t border-border pt-5">
+        <h2 className="text-sm font-semibold">Guide notifications</h2>
+        <p className="text-sm text-muted-foreground">Needs You can alert you when a guide is ready or generation fails, with a link back to the review. Install or update Needs You to 0.2.0-beta.3 or later, then enable Extension activity in its Settings. Telegram is optional.</p>
+        <a className="text-sm underline underline-offset-4" href="/plugins/inbox/inbox/settings" target="_blank" rel="noreferrer">Open Needs You settings</a>
+      </section>
       {error && <div role="alert" className="space-y-2 text-sm text-destructive"><p>{error}</p><Button variant="outline" size="sm" disabled={busy || updating} onClick={() => void load()}>Reload saved settings</Button></div>}
       {!record ? !error && <p role="status">Loading settings…</p> : <>
         <fieldset disabled={busy || updating} className="space-y-6">

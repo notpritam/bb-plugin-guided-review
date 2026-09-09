@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-09-09
+
+- Notify through Needs You when a guide is ready or generation fails, with a direct link to the review.
+- Durable, bounded retries when Needs You is missing, outdated, disabled, or restarting.
+- Keep completed generation identities across reloads; suppress stale and cancelled outcomes.
+- Explain notification setup in Review settings.
+
 ## 0.2.0 — 2026-09-09
 
 - Added setup readiness, installed-version reporting, manual update checks, release links, and optional automatic updates through BB. Automatic updates default off and wait until all review pages close and review work is idle. Saved data stays in BB.

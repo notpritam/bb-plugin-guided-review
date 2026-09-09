@@ -14530,7 +14530,7 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 // package.json
 var package_default = {
   name: "bb-plugin-guided-review",
-  version: "0.2.0",
+  version: "0.2.1",
   type: "module",
   engines: {
     bb: ">=0.41.0",
@@ -15026,8 +15026,10 @@ function createStore(bb) {
       return db.prepare(`SELECT generation_id FROM generations WHERE target_key=?`).get(k)?.generation_id === id;
     },
     interruptGenerations() {
-      db.prepare(`UPDATE reviews SET status='error' WHERE status='generating'`).run();
-      db.prepare(`DELETE FROM generations`).run();
+      db.transaction(() => {
+        db.prepare(`DELETE FROM generations WHERE target_key IN (SELECT target_key FROM reviews WHERE status='generating')`).run();
+        db.prepare(`UPDATE reviews SET status='error' WHERE status='generating'`).run();
+      })();
     },
     getDraft(k) {
       const row = db.prepare(`SELECT * FROM drafts WHERE target_key=?`).get(k);
@@ -15213,6 +15215,119 @@ function targetKey2(t, scope) {
   return `ref-${hash2}`;
 }
 
+// src/completion-notifications.ts
+var PREFIX = "needs-you:pending:";
+var MAX_AGE = 24 * 60 * 60 * 1e3;
+var managers = /* @__PURE__ */ new WeakMap();
+function completionNotifications(bb, store) {
+  let manager = managers.get(bb);
+  if (!manager) {
+    manager = createNotifications(bb, store);
+    managers.set(bb, manager);
+  }
+  return manager;
+}
+function createNotifications(bb, store) {
+  let disposed = false;
+  let flushing;
+  let dirty = false;
+  let storageTail = Promise.resolve();
+  function locked(work2) {
+    const next = storageTail.then(work2);
+    storageTail = next.then(() => {
+    }, () => {
+    });
+    return next;
+  }
+  bb.onDispose(() => {
+    disposed = true;
+  });
+  async function drain() {
+    const keys = await bb.storage.kv.list(PREFIX);
+    if (!keys.length || disposed) return;
+    const liveKeys = [];
+    await locked(async () => {
+      for (const key of keys) {
+        if (disposed) return;
+        const record2 = await bb.storage.kv.get(key);
+        if (!record2) continue;
+        if (Date.now() - record2.occurredAt > MAX_AGE || !store.isCurrentGeneration(record2.targetKey, record2.generationId)) await bb.storage.kv.delete(key);
+        else liveKeys.push(key);
+      }
+    });
+    if (!liveKeys.length || disposed) return;
+    const capability = await bb.sdk.plugins.callRpc({
+      pluginId: "inbox",
+      method: "activityCapabilities",
+      input: null,
+      outputSchema: external_exports.object({ version: external_exports.literal(1) })
+    }).catch(() => null);
+    if (!capability || disposed) return;
+    for (const key of liveKeys) {
+      if (disposed) return;
+      const record2 = await locked(async () => {
+        const pending = await bb.storage.kv.get(key);
+        if (!pending || disposed) return null;
+        if (Date.now() - pending.occurredAt > MAX_AGE || !store.isCurrentGeneration(pending.targetKey, pending.generationId) || store.getReview(pending.targetKey)?.status !== pending.status) {
+          await bb.storage.kv.delete(key);
+          return null;
+        }
+        return pending;
+      });
+      if (!record2 || disposed) continue;
+      const meta3 = store.getReview(record2.targetKey);
+      if (!store.isCurrentGeneration(record2.targetKey, record2.generationId) || meta3?.status !== record2.status) continue;
+      const title = (meta3.title || store.getGuide(record2.targetKey)?.title || "Review guide").slice(0, 240);
+      const result = await bb.sdk.plugins.callRpc({ pluginId: "inbox", method: "publishActivity", input: {
+        sourceId: "guided-review",
+        sourceName: "Guided Review",
+        entityId: record2.targetKey,
+        eventId: record2.generationId,
+        occurredAt: record2.occurredAt,
+        projectId: record2.projectId,
+        title,
+        status: record2.status,
+        body: record2.status === "ready" ? "Your guide is ready. Open it to start reviewing." : "The guide couldn\u2019t be generated. Open the review to try again.",
+        target: { panel: "review", segments: [record2.targetKey] }
+      }, outputSchema: external_exports.object({ accepted: external_exports.literal(true), id: external_exports.string(), duplicate: external_exports.boolean() }) }).catch(() => null);
+      if (disposed) return;
+      if (result) await locked(async () => {
+        if ((await bb.storage.kv.get(key))?.generationId === record2.generationId) await bb.storage.kv.delete(key);
+      });
+    }
+  }
+  function flush() {
+    if (disposed) return Promise.resolve();
+    if (!flushing) flushing = (async () => {
+      do {
+        dirty = false;
+        await drain();
+      } while (dirty && !disposed);
+    })().catch(() => {
+    }).finally(() => {
+      flushing = void 0;
+    });
+    return flushing;
+  }
+  return {
+    flush,
+    async queue(record2) {
+      if (disposed || !store.isCurrentGeneration(record2.targetKey, record2.generationId)) return;
+      await locked(async () => {
+        const key = `${PREFIX}${record2.targetKey}`;
+        const clockKey = `needs-you:clock:${record2.targetKey}`;
+        const previous = await bb.storage.kv.get(clockKey);
+        if (disposed || !store.isCurrentGeneration(record2.targetKey, record2.generationId)) return;
+        const occurredAt = Math.max(Date.now(), (previous ?? 0) + 1);
+        await bb.storage.kv.set(clockKey, occurredAt);
+        await bb.storage.kv.set(key, { ...record2, occurredAt });
+        dirty = true;
+      });
+      await flush();
+    }
+  };
+}
+
 // src/generate.ts
 var active = /* @__PURE__ */ new WeakMap();
 function hasGuideGenerations(bb) {
@@ -15263,14 +15378,22 @@ async function generateGuide(bb, store, targetKey3, projectId) {
       } catch {
       }
     }
-    runs.delete(controller);
   }
   try {
     if (!generationId || !store.isCurrentGeneration(targetKey3, generationId)) return;
     const ok = !controller.signal.aborted && store.getGuide(targetKey3) !== null;
     store.setStatus(targetKey3, ok ? "ready" : "error");
     bb.realtime.publish(`review:${targetKey3}`, { status: ok ? "ready" : "error" });
+    bb.realtime.publish("reviews", { ts: Date.now() });
+    if (!controller.signal.aborted) await completionNotifications(bb, store).queue({
+      targetKey: targetKey3,
+      generationId,
+      projectId,
+      status: ok ? "ready" : "error"
+    });
   } catch {
+  } finally {
+    runs.delete(controller);
   }
 }
 
@@ -16167,11 +16290,14 @@ async function plugin(bb) {
   store.interruptGenerations();
   const submitReview = createReviewSubmitter(store, runGh);
   const sync = createReviewSync(bb, store, runGh);
+  const notifications = completionNotifications(bb, store);
   const updates = createPluginUpdates(bb, () => hasGuideGenerations(bb) || hasReviewAgents(bb));
   bb.background.service("plugin-updates", {
     async start(signal) {
       while (!signal.aborted) {
         await delay(6e4, void 0, { signal }).catch(() => {
+        });
+        if (!signal.aborted) await updates.run(() => notifications.flush(), false).catch(() => {
         });
         if (!signal.aborted) await updates.tick().catch(() => {
         });
