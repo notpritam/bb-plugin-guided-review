@@ -5,6 +5,23 @@ import { defaultPreferences } from "../src/preferences";
 import { readDraftRecovery } from "../lib/draft-recovery";
 afterEach(() => { cleanup(); sessionStorage.clear(); });
 
+test("closing a document releases its lease, while a cached page keeps its editors protected", async () => {
+  await loadPluginApp(() => import("../app"));
+  const { useReviewSession } = await import("../lib/review-session");
+  const presence = vi.fn(() => ({ ok: true }));
+  const beacon = vi.fn(() => true);
+  const original = navigator.sendBeacon;
+  Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: beacon });
+  try {
+    const slot = renderSlot({ component: () => { const session = useReviewSession(); return <p>{session.ready ? "Ready" : "Opening"}</p>; } }, {}, { rpc: { setReviewPresence: presence } });
+    await slot.findByText("Ready");
+    window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })); expect(beacon).not.toHaveBeenCalled();
+    window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false }));
+    expect(beacon).toHaveBeenCalledWith("/api/v1/plugins/guided-review/rpc/setReviewPresence", expect.any(Blob));
+    slot.lifecycle.unmount();
+  } finally { Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: original }); }
+});
+
 test("an unmounted editor's delayed save cannot remove a newer recovery edit", async () => {
   await loadPluginApp(() => import("../app"));
   const { DraftTray } = await import("./DraftTray");

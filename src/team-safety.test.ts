@@ -19,6 +19,21 @@ test("reused assistant receives the current guide after re-review", async () => 
   expect(sent).toContain("New retry behavior"); expect(sent).toContain("supersedes earlier review context");
 });
 
+test("a revision change during output retrieval rejects the stale assistant answer", async () => {
+  let finish!: (answer: string) => void;
+  const { bb } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
+    spawn: async () => ({ id: "agent" }), wait: async () => {}, stop: async () => {},
+    output: () => new Promise<string>(resolve => { finish = resolve; }),
+  } } });
+  const store = createStore(bb); store.savePatch("pr-1", "original patch");
+  const answer = runAgentTurn(bb, store, { targetKey: "pr-1", projectId: "project", message: "Explain" });
+  const outcome = answer.catch(error => error);
+  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+  store.savePatch("pr-1", "updated patch"); finish("Old answer");
+  expect((await outcome).message).toMatch(/review changed/i);
+  expect(store.listAgentMessages("pr-1").some(message => message.role === "assistant")).toBe(false);
+});
+
 test("disposing a plugin aborts its assistant wait and stops the worker using the captured SDK", async () => {
   let waiting = false;
   const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
