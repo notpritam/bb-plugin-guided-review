@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0 — 2026-09-09
+
+- Added setup readiness, installed-version reporting, manual update checks, release links, and optional automatic updates through BB. Automatic updates default off and wait until all review pages close and review work is idle. Saved data stays in BB.
+- Added configurable guide depth, guide and assistant instructions, default diff layout, and separate private reviewer notes with conflict recovery.
+- Refined the responsive workspace, collapsible tool rail, fullscreen menus, and detachable assistant.
+- Kept submitted verdicts visible and archived merged or closed PRs without deleting their guides, drafts, notes, or conversations.
+- Bound saves and submissions to the revision displayed in the browser, and bound submission credentials to the displayed GitHub account.
+- Refreshed assistant context after re-review and stopped its worker when the plugin is disposed.
+
+
 ## 0.1.0 — 2026-09-08
 
 First packaged team preview. Requires BB 0.41.0 and plugin SDK 0.4.34.

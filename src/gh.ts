@@ -29,7 +29,7 @@ export function ghPrChecksJsonArgs(number: number, repo?: string): string[] {
   return repo ? [...a, "-R", repo] : a;
 }
 export function ghPrHeadArgs(number: number, repo?: string): string[] {
-  const a = ["pr", "view", String(number), "--json", "headRefOid,reviewDecision"];
+  const a = ["pr", "view", String(number), "--json", "headRefOid,reviewDecision,state"];
   return repo ? [...a, "-R", repo] : a;
 }
 const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
@@ -55,14 +55,14 @@ export function ghUnresolveThreadArgs(threadId: string): string[] {
     "-f", `id=${threadId}`];
 }
 
-interface RunOpts { cwd?: string; stdin?: string }
+interface RunOpts { cwd?: string; stdin?: string; authToken?: string }
 interface RunResult { stdout: string; stderr: string; code: number }
 
 function run(bin: string, args: string[], opts: RunOpts = {}): Promise<RunResult> {
   return new Promise((resolve) => {
     // This plugin only accepts github.com targets; ambient GH_HOST must not
     // redirect REST requests or account selection to an enterprise host.
-    const child = spawn(bin, args, { cwd: opts.cwd, env: { ...process.env, GH_HOST: "github.com", GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" } });
+    const child = spawn(bin, args, { cwd: opts.cwd, env: { ...process.env, ...(opts.authToken ? { GH_TOKEN: opts.authToken } : {}), GH_HOST: "github.com", GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" } });
     let stdout = "", stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));

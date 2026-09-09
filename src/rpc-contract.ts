@@ -1,5 +1,7 @@
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { releaseRpc } from "./plugin-updates";
+import { preferencesSchema } from "./preferences";
 
 // The RPC data plane between the panel (app.tsx) and the backend (server.ts).
 // Extended task-by-task (reads, draft/submit, viewed-state, agent). app.tsx imports the TYPE
@@ -28,6 +30,19 @@ const commentShape = z
   .strict();
 
 export const rpcContract = defineRpcContract({
+  ...releaseRpc,
+  getSetupStatus: { input: z.null(), output: z.object({ account: z.string().nullable(), githubCli: z.boolean(), agentAvailable: z.boolean().nullable(), projectAvailable: z.boolean().nullable() }) },
+  getReviewBundle: { input: targetKey, output: z.object({ review: z.any().nullable(), guide: z.any().nullable(), patch: z.string(), revision: z.string() }) },
+  getPreferences: { input: z.null(), output: z.object({ preferences: preferencesSchema, revision: z.number().int() }) },
+  savePreferences: {
+    input: z.object({ preferences: preferencesSchema, revision: z.number().int().min(0) }).strict(),
+    output: z.object({ preferences: preferencesSchema, revision: z.number().int() }),
+  },
+  getReviewerNotes: { input: targetKey, output: z.object({ body: z.string(), revision: z.number().int() }) },
+  saveReviewerNotes: {
+    input: z.object({ targetKey: z.string(), body: z.string().max(100000), revision: z.number().int().min(0) }).strict(),
+    output: z.object({ body: z.string(), revision: z.number().int() }),
+  },
   ping: { input: z.null(), output: z.object({ ok: z.boolean() }) },
 
   // Panel: start a review by pasting a GitHub PR URL
@@ -38,6 +53,7 @@ export const rpcContract = defineRpcContract({
 
   // Task 10: read data plane
   listReviews: { input: z.null(), output: z.object({ reviews: z.array(z.any()) }) },
+  refreshReviews: { input: z.null(), output: z.object({ reviews: z.array(z.any()) }) },
   getReview: { input: targetKey, output: z.object({ review: z.any().nullable() }) },
   getGuide: { input: targetKey, output: z.object({ guide: z.any().nullable(), status: z.string() }) },
   getPatch: { input: targetKey, output: z.object({ patch: z.string() }) },
@@ -71,7 +87,7 @@ export const rpcContract = defineRpcContract({
   // Task 11: draft + submit
   getDraft: { input: targetKey, output: z.object({ draft: z.any() }) },
   saveDraftComment: {
-    input: z.object({ targetKey: z.string(), comment: commentShape }).strict(),
+    input: z.object({ targetKey: z.string(), revision: z.string().optional(), comment: commentShape }).strict(),
     output: z.object({ draft: z.any() }),
   },
   removeDraftComment: {
@@ -82,13 +98,14 @@ export const rpcContract = defineRpcContract({
     input: z
       .object({
         targetKey: z.string(),
+        revision: z.string().optional(),
         verdict: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]),
         body: z.string(),
       })
       .strict(),
     output: z.object({ draft: z.any() }),
   },
-  submitReview: { input: targetKey, output: z.object({ ok: z.boolean(), error: z.string().optional() }) },
+  submitReview: { input: z.object({ targetKey: z.string(), revision: z.string().optional(), account: z.string().optional() }).strict(), output: z.object({ ok: z.boolean(), error: z.string().optional() }) },
 
   // Feature 1: per-file "Viewed" state
   getFileViews: {
@@ -114,7 +131,6 @@ export const rpcContract = defineRpcContract({
       .strict(),
     output: z.object({ answer: z.string() }),
   },
-  openAgentThread: { input: targetKey, output: z.object({ threadId: z.string() }) },
 
   // GitHub account indicator + switcher
   getGhAccounts: {

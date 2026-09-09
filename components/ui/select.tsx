@@ -2,7 +2,7 @@ import * as React from "react";
 import * as SelectPrimitive from "@radix-ui/react-select";
 
 import { cn } from "../../lib/utils";
-import { usePortalScopeProps } from "../../lib/portal-scope";
+import { useFullscreenPortalContainer, usePortalScopeProps } from "../../lib/portal-scope";
 import { CONTROL_HOVER_TRANSITION } from "./motion.js";
 import { Icon } from "../../components/ui/icon.js";
 
@@ -71,7 +71,7 @@ const SelectContent = React.forwardRef<
   React.ComponentRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
 >(({ className, children, position = "popper", ...props }, ref) => (
-  <SelectPrimitive.Portal>
+  <SelectPrimitive.Portal container={useFullscreenPortalContainer()}>
     <SelectPrimitive.Content
       ref={ref}
       // Portaled outside every plugin mount; re-attach the plugin CSS scope

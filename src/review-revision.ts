@@ -1,0 +1,13 @@
+import { createHash } from "node:crypto";
+import type { Store } from "./store";
+
+export function reviewRevision(store: Store, targetKey: string): string {
+  const meta = store.getReview(targetKey);
+  const patch = store.readPatch(targetKey, 0, store.readPatch(targetKey, 0, 0).total).text;
+  return createHash("sha256").update(meta?.headSha ?? "").update("\0").update(patch).digest("hex");
+}
+export function requireReviewRevision(store: Store, targetKey: string, revision?: string) {
+  if (!revision || store.getReview(targetKey)?.status === "generating" || revision !== reviewRevision(store, targetKey)) {
+    throw new Error("This review changed in another window. Open the latest diff before saving or submitting feedback. Your text is still here.");
+  }
+}

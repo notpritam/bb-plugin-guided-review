@@ -14,7 +14,18 @@
  * with the host copy and lets Electron route pointer input to visible
  * overlay controls instead of an underlying window-drag region.
  */
+import { useSyncExternalStore } from "react";
 declare const __BB_PLUGIN_ID__: string | undefined;
+
+const subscribeFullscreen = (notify: () => void) => {
+  document.addEventListener("fullscreenchange", notify);
+  return () => document.removeEventListener("fullscreenchange", notify);
+};
+const getFullscreenContainer = () => document.fullscreenElement as HTMLElement | null;
+/** Browser fullscreen paints only the selected subtree, including its portals. */
+export function useFullscreenPortalContainer() {
+  return useSyncExternalStore(subscribeFullscreen, getFullscreenContainer, () => null) ?? undefined;
+}
 
 export function usePortalScopeProps(): {
   "data-bb-portaled-overlay": "";

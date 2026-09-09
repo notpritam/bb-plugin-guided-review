@@ -4,7 +4,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Slot } from "@radix-ui/react-slot";
 
 import { cn } from "../../lib/utils";
-import { usePortalScopeProps } from "../../lib/portal-scope";
+import { useFullscreenPortalContainer, usePortalScopeProps } from "../../lib/portal-scope";
 import { useBrowserDimmingModal } from "../../hooks/useBrowserDimmingModal";
 import {
   type ResponsiveOverlayContextValue,
@@ -240,6 +240,7 @@ const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
     // Unconditional (rules of hooks — the compact branch returns early); the
     // compact drawer path is covered by the persistent drawer shell.
     const scopeProps = usePortalScopeProps();
+    const portalContainer = useFullscreenPortalContainer();
 
     if (isCompactViewport) {
       const domProps = stripRadixContentProps(props);
@@ -268,7 +269,7 @@ const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
     }
 
     return (
-      <DialogPrimitive.Portal>
+      <DialogPrimitive.Portal container={portalContainer}>
         <DialogOverlay />
         <DialogPrimitive.Content
           ref={ref}

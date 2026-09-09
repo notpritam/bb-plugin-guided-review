@@ -1,0 +1,67 @@
+import { expect, test, vi } from "vitest";
+import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
+import { createStore } from "./store";
+import { createReviewSync } from "./review-lifecycle";
+
+function setup(state = "OPEN", reviews: unknown[] = []) {
+  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: { update: async () => ({}), stop: async () => ({}), archive: async () => ({}) } } });
+  const store = createStore(bb);
+  store.saveReview({ targetKey: "pr-1", kind: "pr", repo: "acme/web", number: 1, headSha: "sha1", createdAt: 1, status: "ready" });
+  store.setAgentThread("pr-1", "agent-1");
+  const run = vi.fn(async () => ({ code: 0, stderr: "", stdout: JSON.stringify({ data: { viewer: { login: "me" }, repository: { pullRequest: { state, headRefOid: "sha1", reviews: { nodes: reviews } } } } }) }));
+  return { bb, harness, store, run, sync: createReviewSync(bb, store, run) };
+}
+
+test("sync archives merged reviews and hides and archives their conversation", async () => {
+  const { sync, store, harness } = setup("MERGED");
+  await sync.all();
+  expect(store.getReview("pr-1")).toMatchObject({ prState: "MERGED", archivedAt: expect.any(Number) });
+  expect(harness.inspection.sdk.callsTo("threads.update")[0][0]).toEqual({ threadId: "agent-1", visibility: "hidden" });
+  expect(harness.inspection.sdk.callsTo("threads.archive")).toHaveLength(1);
+});
+
+test("sync restores the viewer's approval, ignoring someone else's later review", async () => {
+  const { sync, store } = setup("OPEN", [
+    { state: "APPROVED", submittedAt: "2026-09-08T10:00:00Z", author: { login: "me" }, commit: { oid: "sha1" } },
+    { state: "CHANGES_REQUESTED", submittedAt: "2026-09-09T10:00:00Z", author: { login: "other" }, commit: { oid: "sha1" } },
+  ]);
+  await sync.all();
+  expect(store.getReview("pr-1")).toMatchObject({ submittedVerdict: "APPROVE", reviewer: "me", submittedHeadSha: "sha1" });
+});
+
+test("failed refresh preserves approval and does not archive a PR", async () => {
+  const { sync, store, run } = setup();
+  store.setLifecycle("pr-1", { submittedVerdict: "APPROVE", submittedAt: 1 });
+  run.mockResolvedValue({ code: 1, stderr: "offline", stdout: "" });
+  await sync.all();
+  expect(store.getReview("pr-1")).toMatchObject({ submittedVerdict: "APPROVE" });
+  expect(store.getReview("pr-1")?.archivedAt).toBeFalsy();
+});
+
+test("an in-flight poll cannot overwrite a newer local submission", async () => {
+  const { sync, store, run } = setup();
+  let finish!: (result: any) => void;
+  run.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = sync.one("pr-1");
+  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+  store.setLifecycle("pr-1", { submittedVerdict: "APPROVE", submittedAt: Date.now() + 1 });
+  finish({ code: 0, stderr: "", stdout: JSON.stringify({ data: { viewer: { login: "me" }, repository: { pullRequest: { state: "OPEN", headRefOid: "sha1", reviews: { nodes: [] } } } } }) });
+  await pending;
+  expect(store.getReview("pr-1")?.submittedVerdict).toBe("APPROVE");
+});
+
+test("deleted workers are detached without losing the review conversation", async () => {
+  const { sync, store, harness } = setup();
+  store.appendAgentMessage("pr-1", "assistant", "Keep this answer");
+  harness.inspection.sdk.stub("threads.update", async () => { throw new Error("HTTP 404: Thread not found"); });
+  await sync.all();
+  expect(store.getAgentThread("pr-1")).toBeNull();
+  expect(store.listAgentMessages("pr-1")[0].text).toBe("Keep this answer");
+});
+
+test("a dismissed approval returns to the review queue", async () => {
+  const { sync, store } = setup("OPEN", [{ state: "DISMISSED", submittedAt: "2026-09-08T10:00:00Z", author: { login: "me" }, commit: { oid: "sha1" } }]);
+  store.setLifecycle("pr-1", { submittedVerdict: "APPROVE", submittedAt: 1 });
+  await sync.all();
+  expect(store.getReview("pr-1")?.submittedVerdict).toBeNull();
+});

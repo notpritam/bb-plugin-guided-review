@@ -1,18 +1,21 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Store } from "./store";
+import { defaultPreferences, guidePreferencesPrompt, type ReviewPreferences } from "./preferences";
 
 const active = new WeakMap<BbPluginApi, Set<AbortController>>();
+export function hasGuideGenerations(bb: BbPluginApi) { return (active.get(bb)?.size ?? 0) > 0; }
 export function stopGuideGenerations(bb: BbPluginApi) {
   for (const controller of active.get(bb) ?? []) controller.abort();
 }
 
-export function buildGenerationPrompt(targetKey: string, generationId?: string): string {
+export function buildGenerationPrompt(targetKey: string, generationId?: string, preferences: ReviewPreferences = defaultPreferences): string {
   return [
     "Author a Guided Review for this change.",
     "Follow the guided-review-generate skill exactly.",
     `The target key is: ${targetKey}`,
     ...(generationId ? [`Pass generationId "${generationId}" to generate_review_guide. It identifies this exact generation run.`] : []),
     "Start by calling read_review_patch, then submit with generate_review_guide.",
+    guidePreferencesPrompt(preferences),
   ].join("\n");
 }
 
@@ -35,7 +38,7 @@ export async function generateGuide(
     const worker = await threads.spawn({
       projectId,
       environment: { type: "project-default" },
-      prompt: buildGenerationPrompt(targetKey, generationId),
+      prompt: buildGenerationPrompt(targetKey, generationId, store.getPreferences().preferences),
       title: `Generate guide: ${targetKey}`,
       visibility: "hidden",
     });
