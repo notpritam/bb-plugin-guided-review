@@ -40,7 +40,9 @@ export const DiffViewer = memo(function DiffViewer({
   registerFileEl,
   onLineSelected,
   themeMode,
+  diffLayout = "split",
 }: {
+  diffLayout?: "split" | "unified";
   themeMode?: "light" | "dark";
   patch: string;
   files: string[];
@@ -136,7 +138,7 @@ export const DiffViewer = memo(function DiffViewer({
                   options={{
                     ...(theme ? { theme } : {}),
                     themeType: themeMode,
-                    diffStyle: compact ? "unified" : "split",
+                    diffStyle: compact ? "unified" : diffLayout,
                     // GitHub-style line picking: drag to select a range, or use
                     // the gutter "+". Uncontrolled — pierre paints the highlight;
                     // we just capture the range to offer comment / ask-agent.

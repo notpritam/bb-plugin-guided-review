@@ -1,16 +1,20 @@
+import { bindGhAccount } from "./gh-identity";
 import type { Store } from "./store";
 import { ghErrorMessage, ghPrHeadArgs, ghSubmitReviewArgs, type runGh } from "./gh";
 import { toGithubReviewPayload } from "./draft";
+import { requireReviewRevision } from "./review-revision";
 import { invalidComments } from "./review-positions";
 
 export function createReviewSubmitter(store: Store, run: typeof runGh) {
   const inFlight = new Set<string>();
-  return async (targetKey: string): Promise<{ ok: boolean; error?: string }> => {
+  return async (targetKey: string, revision?: string, account?: string): Promise<{ ok: boolean; error?: string }> => {
     if (inFlight.has(targetKey)) return { ok: false, error: "This review is already being submitted." };
     inFlight.add(targetKey);
     try {
+      if (revision) requireReviewRevision(store, targetKey, revision);
       const m = store.getReview(targetKey);
       if (!m || m.kind !== "pr" || !m.number || !m.repo) return { ok: false, error: "Submitting requires a GitHub PR target." };
+      if (m.prState === "MERGED" || m.prState === "CLOSED") return { ok: false, error: `This PR is ${m.prState.toLowerCase()}. Your draft has been kept.` };
       if (m.status === "generating") return { ok: false, error: "Wait for the review to finish generating before submitting." };
       if (!m.headSha) return { ok: false, error: "Re-review this PR before submitting so the reviewed revision can be verified." };
       const draft = store.getDraft(targetKey);
@@ -21,17 +25,32 @@ export function createReviewSubmitter(store: Store, run: typeof runGh) {
       const patch = store.readPatch(targetKey, 0, store.readPatch(targetKey, 0, 0).total).text;
       const bad = invalidComments(patch, draft.comments);
       if (bad.length) return { ok: false, error: `These comments are outside the current diff: ${bad.map((c) => `${c.file}:${c.line}`).join(", ")}. Remove them and add any replacement comments on lines in the current diff.` };
-      const head = await run(ghPrHeadArgs(m.number, m.repo));
+      const authenticatedRun = account ? await bindGhAccount(run, account) : run;
+      const head = await authenticatedRun(ghPrHeadArgs(m.number, m.repo));
       if (head.code !== 0) return { ok: false, error: ghErrorMessage(head) };
       let current: unknown;
-      try { current = JSON.parse(head.stdout)?.headRefOid; } catch { /* reject below */ }
+      try {
+        const snapshot = JSON.parse(head.stdout);
+        current = snapshot?.headRefOid;
+        if (snapshot.state === "MERGED" || snapshot.state === "CLOSED") {
+          store.setLifecycle(targetKey, { prState: snapshot.state, archivedAt: Date.now() });
+          return { ok: false, error: `This PR is ${snapshot.state.toLowerCase()}. Your draft has been kept.` };
+        }
+      } catch { /* reject below */ }
       if (typeof current !== "string" || !current) return { ok: false, error: "Could not verify the PR revision. Your draft has been kept." };
       if (current !== m.headSha) return { ok: false, error: "The PR has new commits. Re-review the latest changes before submitting. Your draft has been kept." };
       if (store.getReview(targetKey)?.status === "generating" || store.getReview(targetKey)?.headSha !== m.headSha) return { ok: false, error: "The review changed during submission. Wait for generation and review the draft again." };
-      const result = await run(ghSubmitReviewArgs(m.repo, m.number), {
+      if (revision) requireReviewRevision(store, targetKey, revision);
+      const result = await authenticatedRun(ghSubmitReviewArgs(m.repo, m.number), {
         stdin: JSON.stringify({ ...toGithubReviewPayload(draft), commit_id: m.headSha }),
       });
       if (result.code !== 0) return { ok: false, error: ghErrorMessage(result) };
+      let reviewer: string | undefined;
+      try {
+        const receipt = JSON.parse(result.stdout);
+        if (typeof receipt?.user?.login === "string") reviewer = receipt.user.login;
+      } catch { /* A successful response still records the submitted verdict. */ }
+      store.setLifecycle(targetKey, { submittedVerdict: draft.verdict, submittedAt: Date.now(), submittedHeadSha: m.headSha, ...(reviewer ? { reviewer } : {}) });
       store.clearSubmittedDraft(draft);
       return { ok: true };
     } catch (error) {

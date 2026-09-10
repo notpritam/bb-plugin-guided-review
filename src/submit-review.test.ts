@@ -18,11 +18,13 @@ function setup() {
 
 test("submission pins the reviewed commit and clears only the submitted draft", async () => {
   const { store, run, submit } = setup();
+  store.saveReviewerNotes("pr-test", "Private: ask about rollout", 0);
   expect(await submit("pr-test")).toEqual({ ok: true });
   expect(run).toHaveBeenLastCalledWith(expect.arrayContaining(["repos/acme/web/pulls/7/reviews"]), {
     stdin: JSON.stringify({ event: "COMMENT", body: "My summary", comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "Please explain this" }], commit_id: "sha1" }),
   });
   expect(store.getDraft("pr-test")).toMatchObject({ verdict: "COMMENT", body: "", comments: [] });
+  expect(store.getReviewerNotes("pr-test").body).toBe("Private: ask about rollout");
   expect(await submit("pr-test")).toMatchObject({ ok: false });
   expect(run).toHaveBeenCalledTimes(2);
 });
@@ -75,4 +77,31 @@ test("local refs never submit to GitHub", async () => {
   store.setVerdict("local", "APPROVE", "");
   expect(await submit("local")).toMatchObject({ ok: false });
   expect(run).not.toHaveBeenCalled();
+});
+
+test("approval persists separately from the cleared draft and survives metadata refresh", async () => {
+  const { store, submit } = setup();
+  store.setVerdict("pr-test", "APPROVE", "Looks good");
+  expect(await submit("pr-test")).toEqual({ ok: true });
+  expect(store.getReview("pr-test")).toMatchObject({ submittedVerdict: "APPROVE", submittedHeadSha: "sha1", submittedAt: expect.any(Number) });
+  const { submittedVerdict, submittedHeadSha, submittedAt, ...meta } = store.getReview("pr-test")! as any;
+  store.saveReview(meta);
+  expect(store.getReview("pr-test")).toMatchObject({ submittedVerdict: "APPROVE" });
+});
+
+test("a PR merged since opening the workspace blocks submission and archives the review", async () => {
+  const { store, run, submit } = setup();
+  run.mockResolvedValueOnce({ code: 0, stderr: "", stdout: '{"headRefOid":"sha1","state":"MERGED"}' });
+  expect(await submit("pr-test")).toMatchObject({ ok: false, error: expect.stringContaining("merged") });
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(store.getReview("pr-test")).toMatchObject({ prState: "MERGED", archivedAt: expect.any(Number) });
+  expect(store.getDraft("pr-test").comments).toHaveLength(1);
+});
+
+test("submission records the reviewer from GitHub so account switches cannot misattribute it", async () => {
+  const { store, run, submit } = setup();
+  run.mockResolvedValueOnce({ code: 0, stderr: "", stdout: '{"headRefOid":"sha1","state":"OPEN"}' })
+    .mockResolvedValueOnce({ code: 0, stderr: "", stdout: '{"id":12,"user":{"login":"reviewer"}}' });
+  expect(await submit("pr-test")).toEqual({ ok: true });
+  expect(store.getReview("pr-test")?.reviewer).toBe("reviewer");
 });

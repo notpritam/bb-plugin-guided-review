@@ -2,8 +2,19 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Guide } from "./guide";
 import type { Draft, DraftComment, Verdict } from "./draft";
 import { createHash, randomUUID } from "node:crypto";
+import { defaultPreferences, preferencesSchema, type PreferencesRecord, type ReviewPreferences, type ReviewerNotesRecord } from "./preferences";
 
-export interface ReviewMeta {
+export interface ReviewLifecycle {
+  prState?: "OPEN" | "CLOSED" | "MERGED";
+  archivedAt?: number | null;
+  submittedVerdict?: Verdict | null;
+  submittedAt?: number | null;
+  submittedHeadSha?: string | null;
+  reviewer?: string | null;
+  latestHeadSha?: string;
+}
+
+export interface ReviewMeta extends ReviewLifecycle {
   targetKey: string;
   kind: "pr" | "ref";
   number?: number;
@@ -46,10 +57,15 @@ export interface AgentMessage {
 }
 
 export interface Store {
+  getPreferences(): PreferencesRecord;
+  savePreferences(preferences: ReviewPreferences, revision: number): PreferencesRecord;
+  getReviewerNotes(targetKey: string): ReviewerNotesRecord;
+  saveReviewerNotes(targetKey: string, body: string, revision: number): ReviewerNotesRecord;
   saveReview(meta: ReviewMeta): void;
   getReview(targetKey: string): ReviewMeta | null;
   listReviews(): ReviewMeta[];
   setStatus(targetKey: string, status: ReviewMeta["status"]): void;
+  setLifecycle(targetKey: string, state: ReviewLifecycle): void;
   savePatch(targetKey: string, patch: string): void;
   readPatch(targetKey: string, offset?: number, limit?: number): { text: string; total: number };
   saveGuide(targetKey: string, guide: Guide): void;
@@ -70,6 +86,7 @@ export interface Store {
   // Persistent review-agent thread + in-panel chat log (Feature 3).
   getAgentThread(targetKey: string): string | null;
   setAgentThread(targetKey: string, threadId: string): void;
+  clearAgentThread(targetKey: string): void;
   listAgentMessages(targetKey: string): AgentMessage[];
   appendAgentMessage(
     targetKey: string,
@@ -105,6 +122,9 @@ export function createStore(bb: BbPluginApi): Store {
     `CREATE TABLE IF NOT EXISTS draft_comment_revisions (
       target_key TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL, side TEXT NOT NULL,
       patch_hash TEXT NOT NULL, PRIMARY KEY (target_key, file, line, side))`,
+    `CREATE TABLE IF NOT EXISTS review_lifecycle (target_key TEXT PRIMARY KEY, state TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS review_preferences (id INTEGER PRIMARY KEY CHECK (id=1), value TEXT NOT NULL, revision INTEGER NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS reviewer_notes (target_key TEXT PRIMARY KEY, body TEXT NOT NULL, revision INTEGER NOT NULL)`,
   ]);
 
   const rowToMeta = (r: any): ReviewMeta => ({
@@ -113,9 +133,33 @@ export function createStore(bb: BbPluginApi): Store {
     head: r.head ?? undefined, gitRef: r.git_ref ?? undefined, url: r.url ?? undefined,
     status: r.status, createdAt: r.created_at, projectId: r.project_id ?? undefined,
     headSha: r.head_sha ?? undefined, cwd: r.cwd ?? undefined,
+    ...JSON.parse((db.prepare(`SELECT state FROM review_lifecycle WHERE target_key=?`).get(r.target_key) as any)?.state ?? "{}"),
   });
 
   return {
+    getPreferences() {
+      const row = db.prepare(`SELECT value,revision FROM review_preferences WHERE id=1`).get() as { value: string; revision: number } | undefined;
+      return { preferences: row ? preferencesSchema.parse({ ...defaultPreferences, ...JSON.parse(row.value) }) : { ...defaultPreferences }, revision: row?.revision ?? 0 };
+    },
+    savePreferences(preferences, revision) {
+      const value = JSON.stringify(preferencesSchema.parse(preferences));
+      const result = revision === 0
+        ? db.prepare(`INSERT OR IGNORE INTO review_preferences (id,value,revision) VALUES (1,?,1)`).run(value)
+        : db.prepare(`UPDATE review_preferences SET value=?,revision=revision+1 WHERE id=1 AND revision=?`).run(value, revision);
+      if (!result.changes) throw new Error("Settings changed in another window. Reload settings before saving.");
+      return { preferences: JSON.parse(value), revision: revision + 1 };
+    },
+    getReviewerNotes(targetKey) {
+      return (db.prepare(`SELECT body,revision FROM reviewer_notes WHERE target_key=?`).get(targetKey) as ReviewerNotesRecord | undefined) ?? { body: "", revision: 0 };
+    },
+    saveReviewerNotes(targetKey, body, revision) {
+      if (!this.getReview(targetKey)) throw new Error("Review not found.");
+      const result = revision === 0
+        ? db.prepare(`INSERT OR IGNORE INTO reviewer_notes (target_key,body,revision) VALUES (?,?,1)`).run(targetKey, body)
+        : db.prepare(`UPDATE reviewer_notes SET body=?,revision=revision+1 WHERE target_key=? AND revision=?`).run(body, targetKey, revision);
+      if (!result.changes) throw new Error("Notes changed in another window. Your text is kept here; reload the saved notes to compare.");
+      return { body, revision: revision + 1 };
+    },
     saveReview(m) {
       db.prepare(
         `INSERT INTO reviews (target_key,kind,number,repo,title,author,base,head,git_ref,url,status,created_at,project_id,head_sha,cwd)
@@ -140,6 +184,11 @@ export function createStore(bb: BbPluginApi): Store {
     },
     setStatus(k, status) {
       db.prepare(`UPDATE reviews SET status=? WHERE target_key=?`).run(status, k);
+    },
+    setLifecycle(k, state) {
+      const previous = JSON.parse((db.prepare(`SELECT state FROM review_lifecycle WHERE target_key=?`).get(k) as any)?.state ?? "{}");
+      db.prepare(`INSERT INTO review_lifecycle VALUES (?,?) ON CONFLICT(target_key) DO UPDATE SET state=excluded.state`)
+        .run(k, JSON.stringify({ ...previous, ...state }));
     },
     savePatch(k, patch) {
       db.prepare(
@@ -175,8 +224,12 @@ export function createStore(bb: BbPluginApi): Store {
       return (db.prepare(`SELECT generation_id FROM generations WHERE target_key=?`).get(k) as any)?.generation_id === id;
     },
     interruptGenerations() {
-      db.prepare(`UPDATE reviews SET status='error' WHERE status='generating'`).run();
-      db.prepare(`DELETE FROM generations`).run();
+      db.transaction(() => {
+        // Completed identities are also durable notification receipts. Only
+        // workers interrupted by this reload lose the right to finalize.
+        db.prepare(`DELETE FROM generations WHERE target_key IN (SELECT target_key FROM reviews WHERE status='generating')`).run();
+        db.prepare(`UPDATE reviews SET status='error' WHERE status='generating'`).run();
+      })();
     },
     getDraft(k) {
       const row: any = db.prepare(`SELECT * FROM drafts WHERE target_key=?`).get(k);
@@ -246,6 +299,9 @@ export function createStore(bb: BbPluginApi): Store {
         `INSERT INTO agent_threads (target_key,thread_id,created_at) VALUES (?,?,?)
          ON CONFLICT(target_key) DO UPDATE SET thread_id=excluded.thread_id`,
       ).run(k, threadId, Date.now());
+    },
+    clearAgentThread(k) {
+      db.prepare(`DELETE FROM agent_threads WHERE target_key=?`).run(k);
     },
     listAgentMessages(k) {
       return db

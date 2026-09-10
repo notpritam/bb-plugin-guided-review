@@ -1,10 +1,11 @@
 {
   "name": "bb-plugin-guided-review",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "type": "module",
   "engines": {
     "bb": ">=0.41.0",
-    "bbPluginSdk": ">=0.4.34"
+    "bbPluginSdk": ">=0.4.34",
+    "node": ">=24"
   },
   "bb": {
     "name": "Guided Review",
@@ -46,6 +47,7 @@
     "cron-parser": "^5.5.0",
     "hono": "^4.11.9",
     "jsdom": "^25.0.0",
+    "playwright": "^1.62.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "sonner": "^1.7.4",
@@ -59,5 +61,13 @@
     "typecheck": "tsc --noEmit",
     "build": "bb plugin build",
     "check": "npm test && npm run typecheck && bb plugin types --check && npm run build"
-  }
+  },
+  "description": "Chaptered pull-request reviews inside BB, with private notes and a review assistant.",
+  "author": "Pritam Sharma",
+  "homepage": "https://notpritam.in/plugins/guided-review",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/notpritam/bb-plugin-guided-review.git"
+  },
+  "license": "MIT"
 }

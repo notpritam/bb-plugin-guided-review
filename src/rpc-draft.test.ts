@@ -15,7 +15,7 @@ vi.mock("./gh", async (importOriginal) => {
       // `ghSubmitReviewArgs` produces the path as a single element like
       // "repos/acme/web/pulls/1/reviews" — `args.includes("reviews")` (exact
       // element match) never matches that; check for a substring instead.
-      args.some((a) => a.includes("reviews")) ? submit(args) : Promise.resolve({ stdout: JSON.stringify({ headRefOid: "sha123" }), stderr: "", code: 0 }),
+      args[0] === "auth" ? Promise.resolve({ stdout: "test-token", stderr: "", code: 0 }) : args[1] === "user" ? Promise.resolve({ stdout: "casey", stderr: "", code: 0 }) : args.some((a) => a.includes("reviews")) ? submit(args) : Promise.resolve({ stdout: JSON.stringify({ headRefOid: "sha123" }), stderr: "", code: 0 }),
   };
 });
 
@@ -29,12 +29,14 @@ test("draft comment then submit builds a batched review", async () => {
   const store = createStore(bb);
   store.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, repo: "acme/web", headSha: "sha123", status: "ready", createdAt: 1 });
   store.savePatch("pr-1", "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -0,0 +1,2 @@\n+one\n+two\n");
+  const { revision } = await harness.behavior.callRpc("getReviewBundle", { targetKey: "pr-1" }) as any;
   await harness.behavior.callRpc("saveDraftComment", {
+    revision,
     targetKey: "pr-1",
     comment: { file: "a.ts", line: 1, side: "RIGHT", body: "nit" },
   });
-  await harness.behavior.callRpc("setVerdict", { targetKey: "pr-1", verdict: "COMMENT", body: "ok" });
-  const res = await harness.behavior.callRpc("submitReview", { targetKey: "pr-1" });
+  await harness.behavior.callRpc("setVerdict", { targetKey: "pr-1", revision, verdict: "COMMENT", body: "ok" });
+  const res = await harness.behavior.callRpc("submitReview", { targetKey: "pr-1", revision, account: "casey" });
   expect((res as any).ok).toBe(true);
   expect(submit).toHaveBeenCalled();
 });

@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-//
-// AgentDock uses useRpc/useRealtime, so it must be imported dynamically after
-// the test plugin runtime is installed (same reason as ThreadsPanel.test.tsx).
-// It portals into document.body, so queries go through `screen`.
 import { test, expect, vi, afterEach, beforeEach } from "vitest";
 import { cleanup, screen, fireEvent } from "@testing-library/react";
 import { installTestPluginRuntime, renderSlot } from "@get-bb/plugin-sdk/testing/app";
@@ -11,61 +7,60 @@ installTestPluginRuntime();
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
 
-test("opens from the FAB and lists nothing initially", async () => {
+test("the assistant starts in the review panel, with an optional widget", async () => {
   const { AgentDock } = await import("./AgentDock");
-  renderSlot(
-    { component: AgentDock },
-    { targetKey: "pr-1", currentFile: "src/a.ts", currentChapterId: "c1" },
-    { rpc: { getAgentMessages: () => ({ messages: [] }) } as any },
-  );
-  fireEvent.click(screen.getByLabelText("Ask the review agent"));
+  renderSlot({ component: AgentDock }, { targetKey: "pr-1" }, { rpc: { getAgentMessages: () => ({ messages: [] }) } });
+  await screen.findByText("Ask about this change.");
+  expect(screen.getByRole("region", { name: "Review assistant" })).toBeTruthy();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("button", { name: "Open assistant as widget" })).toBeTruthy();
+  expect(screen.queryByText("Open as thread")).toBeNull();
+});
+
+test("a draft question and selection survive popping out and docking, including fullscreen", async () => {
+  const { AgentDock } = await import("./AgentDock");
+  const container = document.createElement("div"); document.body.appendChild(container);
+  const onDock = vi.fn();
+  const slot = renderSlot({ component: AgentDock }, { targetKey: "pr-1", container, currentFile: "src/a.ts", currentChapterId: "c1", onDock }, { rpc: { getAgentMessages: () => ({ messages: [] }) } });
+  await screen.findByText("Ask about this change.");
+  fireEvent.change(screen.getByRole("textbox", { name: "Ask the agent" }), { target: { value: "Is this safe?" } });
+  fireEvent.click(screen.getByRole("button", { name: "Open assistant as widget" }));
+  const widget = await screen.findByRole("dialog", { name: "Review agent" });
+  expect(container.contains(widget)).toBe(true);
+  expect((screen.getByRole("textbox", { name: "Ask the agent" }) as HTMLTextAreaElement).value).toBe("Is this safe?");
+  fireEvent.click(widget.querySelector('[aria-label="Dock in review panel"]')!);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect((screen.getByRole("textbox", { name: "Ask the agent" }) as HTMLTextAreaElement).value).toBe("Is this safe?");
+  expect(screen.getByText("a.ts")).toBeTruthy();
+  expect(onDock).toHaveBeenCalledOnce();
+  slot.lifecycle.unmount(); container.remove();
+});
+
+test("moving a pending answer between panel and widget does not send it twice", async () => {
+  const { AgentDock } = await import("./AgentDock");
+  let resolve!: (value: { answer: string }) => void;
+  const askAgent = vi.fn(() => new Promise<{ answer: string }>((done) => { resolve = done; }));
+  renderSlot({ component: AgentDock }, { targetKey: "pr-1", currentFile: "src/a.ts", currentChapterId: "c1" }, { rpc: { getAgentMessages: () => ({ messages: [] }), askAgent } });
+  fireEvent.change(await screen.findByRole("textbox", { name: "Ask the agent" }), { target: { value: "Is this safe?" } });
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Ask the agent" }), { key: "Enter" });
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Ask the agent" }), { key: "Enter" });
+  fireEvent.click(screen.getByRole("button", { name: "Open assistant as widget" }));
   await screen.findByRole("dialog");
-  expect(screen.getByText(/Ask about this change/)).toBeTruthy();
+  expect(screen.getByText("Thinking…")).toBeTruthy();
+  await vi.waitFor(() => expect(askAgent).toHaveBeenCalledExactlyOnceWith({ targetKey: "pr-1", message: "Is this safe?", context: { file: "src/a.ts", chapterId: "c1" } }));
+  resolve({ answer: "ok" });
+  await vi.waitFor(() => expect(screen.queryByText("Thinking…")).toBeNull());
 });
 
-test("sending a message calls askAgent with the current-file context", async () => {
+test("a failed transcript refresh after successful sending does not restore the sent question", async () => {
   const { AgentDock } = await import("./AgentDock");
-  const askAgent = vi.fn(() => ({ answer: "ok" }));
-  renderSlot(
-    { component: AgentDock },
-    { targetKey: "pr-1", currentFile: "src/a.ts", currentChapterId: "c1" },
-    { rpc: { getAgentMessages: () => ({ messages: [] }), askAgent } as any },
-  );
-  fireEvent.click(screen.getByLabelText("Ask the review agent"));
-  fireEvent.change(await screen.findByPlaceholderText(/Ask the agent/), { target: { value: "is this safe?" } });
-  fireEvent.click(screen.getByLabelText("Send"));
-  await vi.waitFor(() =>
-    expect(askAgent).toHaveBeenCalledWith({
-      targetKey: "pr-1",
-      message: "is this safe?",
-      context: { file: "src/a.ts", chapterId: "c1" },
-    }),
-  );
-});
-
-test("portals into the provided container so it survives fullscreen", async () => {
-  const { AgentDock } = await import("./AgentDock");
-  const host = document.createElement("div");
-  document.body.appendChild(host);
-  renderSlot(
-    { component: AgentDock },
-    { targetKey: "pr-1", container: host },
-    { rpc: { getAgentMessages: () => ({ messages: [] }) } as any },
-  );
-  // The FAB must live inside the fullscreen-able container, not document.body.
-  expect(host.querySelector('[aria-label="Ask the review agent"]')).toBeTruthy();
-  host.remove();
-});
-
-test("the header link opens the underlying bb thread", async () => {
-  const { AgentDock } = await import("./AgentDock");
-  const openAgentThread = vi.fn(() => ({ threadId: "th_1" }));
-  renderSlot(
-    { component: AgentDock },
-    { targetKey: "pr-1" },
-    { rpc: { getAgentMessages: () => ({ messages: [] }), openAgentThread } as any },
-  );
-  fireEvent.click(screen.getByLabelText("Ask the review agent"));
-  fireEvent.click(await screen.findByText("Open as thread"));
-  await vi.waitFor(() => expect(openAgentThread).toHaveBeenCalledWith({ targetKey: "pr-1" }));
+  const history = vi.fn().mockResolvedValueOnce({ messages: [] }).mockRejectedValue(new Error("offline"));
+  const askAgent = vi.fn(async () => ({ answer: "Saved answer" }));
+  renderSlot({ component: AgentDock }, { targetKey: "pr-1" }, { rpc: { getAgentMessages: history, askAgent } });
+  await screen.findByText("Ask about this change.");
+  fireEvent.change(screen.getByRole("textbox", { name: "Ask the agent" }), { target: { value: "A question" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await screen.findByRole("alert");
+  expect((screen.getByRole("textbox", { name: "Ask the agent" }) as HTMLTextAreaElement).value).toBe("");
+  expect(askAgent).toHaveBeenCalledOnce();
 });

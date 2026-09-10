@@ -11,7 +11,7 @@ import { changedFiles } from "./src/patch";
 import { validateGuide, checkCoverage } from "./src/guide";
 import { runReviewCommand } from "./src/review-command";
 import { createPrReview } from "./src/start-review";
-import { runAgentTurn, openAgentThread } from "./src/agent";
+import { runAgentTurn, stopReviewAgents, hasReviewAgents } from "./src/agent";
 import { computeFileViewState, hashForFile } from "./src/file-views";
 import {
   ghPrViewArgs,
@@ -26,11 +26,17 @@ import {
   runGit,
   ghErrorMessage,
 } from "./src/gh";
+import { createReviewSync } from "./src/review-lifecycle";
+import { setTimeout as delay } from "node:timers/promises";
+import { requireReviewRevision, reviewRevision } from "./src/review-revision";
 import { createReviewSubmitter } from "./src/submit-review";
-import { stopGuideGenerations } from "./src/generate";
+import { stopGuideGenerations, hasGuideGenerations } from "./src/generate";
 import { parseChecks, parseReviewThreads } from "./src/threads";
 import { rerunReview } from "./src/rereview";
 import { getGhAccounts, switchGhAccount, checkRepoAccess } from "./src/gh-accounts";
+
+import { completionNotifications } from "./src/completion-notifications";
+import { createPluginUpdates } from "./src/plugin-updates";
 
 export { rpcContract } from "./src/rpc-contract";
 
@@ -38,11 +44,50 @@ export default async function plugin(bb: BbPluginApi) {
   const store = createStore(bb);
   store.interruptGenerations();
   const submitReview = createReviewSubmitter(store, runGh);
-  bb.onDispose(() => stopGuideGenerations(bb));
+  const sync = createReviewSync(bb, store, runGh);
+  const notifications = completionNotifications(bb, store);
+  const updates = createPluginUpdates(bb, () => hasGuideGenerations(bb) || hasReviewAgents(bb));
+  bb.background.service("plugin-updates", {
+    async start(signal) {
+      while (!signal.aborted) {
+        await delay(60_000, undefined, { signal }).catch(() => {});
+        if (!signal.aborted) await updates.run(() => notifications.flush(), false).catch(() => {});
+        if (!signal.aborted) await updates.tick().catch(() => {});
+      }
+    },
+  });
+  bb.background.service("review-state", {
+    async start(signal) {
+      while (!signal.aborted) {
+        await updates.run(() => sync.all(), false).catch(() => {});
+        await delay(60_000, undefined, { signal }).catch(() => {});
+      }
+    },
+  });
+  bb.onDispose(() => { stopGuideGenerations(bb); stopReviewAgents(bb); });
 
   bb.log.info("guided-review loaded");
 
-  bb.rpc.register(rpcContract, {
+  const handlers: Omit<Parameters<typeof bb.rpc.register<typeof rpcContract>>[1], keyof typeof import("./src/plugin-updates").releaseRpc> = {
+    async getSetupStatus() {
+      const [cli, user, providers, projects] = await Promise.all([
+        runGh(["--version"]), runGh(["api", "user", "--jq", ".login"]),
+        bb.sdk.providers.list().catch(() => null), bb.sdk.projects.list({ includePersonal: true }).catch(() => null),
+      ]);
+      return { githubCli: cli.code === 0, account: user.code === 0 ? user.stdout.trim() || null : null, agentAvailable: providers ? providers.some(p => p.available) : null, projectAvailable: projects ? projects.length > 0 : null };
+    },
+    getReviewBundle({ targetKey }) {
+      return { review: JSON.parse(JSON.stringify(store.getReview(targetKey))), guide: store.getGuide(targetKey),
+        patch: store.readPatch(targetKey, 0, store.readPatch(targetKey, 0, 0).total).text, revision: reviewRevision(store, targetKey) };
+    },
+    getPreferences() { return store.getPreferences(); },
+    savePreferences({ preferences, revision }) {
+      const result = store.savePreferences(preferences, revision);
+      bb.realtime.publish("preferences", {});
+      return result;
+    },
+    getReviewerNotes({ targetKey }) { return store.getReviewerNotes(targetKey); },
+    saveReviewerNotes({ targetKey, body, revision }) { return store.saveReviewerNotes(targetKey, body, revision); },
     ping() {
       return { ok: true };
     },
@@ -68,6 +113,10 @@ export default async function plugin(bb: BbPluginApi) {
       // ReviewMeta rows carry optional fields as literal `undefined` own
       // properties (store.ts's rowToMeta), which the rpc layer's strict JSON
       // output check rejects; round-trip through JSON to drop them.
+      return { reviews: JSON.parse(JSON.stringify(store.listReviews())) };
+    },
+    async refreshReviews() {
+      await sync.all(true);
       return { reviews: JSON.parse(JSON.stringify(store.listReviews())) };
     },
     getReview({ targetKey }) {
@@ -123,8 +172,9 @@ export default async function plugin(bb: BbPluginApi) {
       return r.code === 0 ? { ok: true } : { ok: false, error: ghErrorMessage(r) };
     },
     async checkForUpdates({ targetKey }) {
+      await sync.one(targetKey);
       const m = store.getReview(targetKey);
-      if (!m || m.kind !== "pr" || !m.number) return { hasNewCommits: false };
+      if (!m || m.kind !== "pr" || !m.number || m.archivedAt) return { hasNewCommits: false };
       const r = await runGh(ghPrHeadArgs(m.number, m.repo));
       if (r.code !== 0) return { hasNewCommits: false };
       let head: any;
@@ -137,6 +187,8 @@ export default async function plugin(bb: BbPluginApi) {
       return { hasNewCommits: !!m.headSha && head.headRefOid !== m.headSha, current: head.headRefOid, ...(m.headSha ? { stored: m.headSha } : {}) };
     },
     async rereview({ targetKey }) {
+      await sync.one(targetKey, true);
+      if (store.getReview(targetKey)?.archivedAt) return { ok: false, error: "This PR is archived. Its guide and conversation are still available." };
       return rerunReview({ bb, store, gh: { runGh, runGit } }, targetKey);
     },
 
@@ -144,17 +196,24 @@ export default async function plugin(bb: BbPluginApi) {
     getDraft({ targetKey }) {
       return { draft: store.getDraft(targetKey) };
     },
-    saveDraftComment({ targetKey, comment }) {
+    saveDraftComment({ targetKey, comment, revision }) {
+      requireReviewRevision(store, targetKey, revision);
       return { draft: store.upsertDraftComment(targetKey, comment) };
     },
     removeDraftComment({ targetKey, index }) {
       return { draft: store.removeDraftComment(targetKey, index) };
     },
-    setVerdict({ targetKey, verdict, body }) {
+    setVerdict({ targetKey, verdict, body, revision }) {
+      requireReviewRevision(store, targetKey, revision);
       return { draft: store.setVerdict(targetKey, verdict, body) };
     },
-    async submitReview({ targetKey }) {
-      return submitReview(targetKey);
+    async submitReview({ targetKey, revision, account }) {
+      if (!account) return { ok: false, error: "Verify your GitHub account before submitting. Reload this review to check access." };
+      try { requireReviewRevision(store, targetKey, revision); } catch (error) { return { ok: false, error: (error as Error).message }; }
+      const result = await submitReview(targetKey, revision, account);
+      bb.realtime.publish(`review:${targetKey}`, { ts: Date.now() });
+      bb.realtime.publish("reviews", { ts: Date.now() });
+      return result;
     },
 
     // Feature 1: per-file "Viewed" state (viewed/stale computed against the patch)
@@ -188,12 +247,6 @@ export default async function plugin(bb: BbPluginApi) {
       bb.realtime.publish(`agent:${targetKey}`, { ts: Date.now() });
       return res;
     },
-    async openAgentThread({ targetKey }) {
-      const m = store.getReview(targetKey);
-      if (!m?.projectId) throw new Error("This review has no associated project.");
-      return openAgentThread(bb, store, { targetKey, projectId: m.projectId });
-    },
-
     // GitHub account indicator + switcher
     async getGhAccounts() {
       return getGhAccounts(runGh);
@@ -207,6 +260,16 @@ export default async function plugin(bb: BbPluginApi) {
       const repo = store.getReview(targetKey)?.repo ?? null;
       return checkRepoAccess(runGh, repo);
     },
+  };
+  const guarded = Object.fromEntries(Object.entries(handlers).map(([name, handler]) =>
+    [name, (input: unknown) => updates.run(() => (handler as (input: unknown) => unknown)(input))])) as typeof handlers;
+  bb.rpc.register(rpcContract, {
+    ...guarded,
+    getReleaseStatus: () => updates.status(),
+    checkPluginUpdates: () => updates.check(),
+    setAutomaticUpdates: ({ enabled }) => updates.setAutomatic(enabled),
+    setReviewPresence: ({ clientId, open }) => updates.presence(clientId, open),
+    applyPluginUpdate: ({ clientId, candidateVersion }) => updates.apply(clientId, candidateVersion),
   });
 
   bb.agents.registerTool({
@@ -274,7 +337,7 @@ export default async function plugin(bb: BbPluginApi) {
     summary: "Open a Guided Review of a GitHub PR or local git ref",
     commands: [{ name: "review", summary: "Review a PR or ref", usage: "bb review <pr-url | pr-number | git-ref> [--base <ref>]" }],
     async run(argv, ctx) {
-      return runReviewCommand({ bb, store, gh: { runGh, runGit } }, argv, ctx);
+      return updates.run(() => runReviewCommand({ bb, store, gh: { runGh, runGit } }, argv, ctx));
     },
   });
 }

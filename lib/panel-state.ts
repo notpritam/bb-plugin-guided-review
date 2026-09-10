@@ -9,6 +9,8 @@ export interface ReviewUiState {
   scrollTop?: number;
   sidebarWidth?: number;
   focus?: boolean;
+  toolsOpen?: boolean;
+  activeTool?: "draft" | "notes" | "agent";
 }
 
 interface PanelState {

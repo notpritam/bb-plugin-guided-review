@@ -11,292 +11,165 @@ import { Icon } from "./ui/icon";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 
-export interface DockInjection {
-  context: AgentMessageContext;
-  nonce: number;
-}
-
-interface Persisted {
-  open: boolean;
-  rect: Rect;
-}
-
-function loadPersisted(targetKey: string): Persisted | null {
-  try {
-    const raw = localStorage.getItem(`gr:agentdock:${targetKey}`);
-    return raw ? (JSON.parse(raw) as Persisted) : null;
-  } catch {
-    return null;
-  }
-}
-function savePersisted(targetKey: string, p: Persisted) {
-  try {
-    localStorage.setItem(`gr:agentdock:${targetKey}`, JSON.stringify(p));
-  } catch {
-    // storage unavailable — dock still works, just won't remember position.
-  }
-}
-
-function bounds() {
-  return { width: window.innerWidth, height: window.innerHeight };
-}
-
-function contextLabel(c: AgentMessageContext): string {
-  if (!c.file) return "whole change";
-  const name = c.file.split("/").pop() ?? c.file;
-  if (c.startLine != null) {
-    const end = c.endLine != null && c.endLine !== c.startLine ? `-${c.endLine}` : "";
-    return `${name}:${c.startLine}${end}`;
-  }
-  return name;
-}
-
-export const AgentDock = memo(function AgentDock({
-  targetKey,
-  currentFile,
-  currentChapterId,
-  injection,
-  container,
-}: {
+export interface DockInjection { context: AgentMessageContext; nonce: number; }
+export interface AgentDockProps {
   targetKey: string;
   currentFile?: string;
   currentChapterId?: string;
   injection?: DockInjection;
-  /**
-   * Where to portal into. Pass the element that can enter fullscreen (the panel
-   * root): when it goes fullscreen the browser only paints that element's
-   * subtree, so a dock portaled to document.body would vanish. `position: fixed`
-   * still resolves against the viewport, so normal-mode placement is unchanged.
-   */
+  /** Fullscreen root, so a popped-out widget remains in the visible subtree. */
   container?: HTMLElement | null;
-}) {
+  active?: boolean;
+  onDock?: () => void;
+  onCollapse?: () => void;
+}
+interface Persisted { mode: "panel" | "widget"; rect: Rect; }
+function bounds() { return { width: window.innerWidth, height: window.innerHeight }; }
+function loadPersisted(targetKey: string): Persisted | null {
+  try { return JSON.parse(localStorage.getItem(`gr:agentdock:${targetKey}`) ?? "null"); }
+  catch { return null; }
+}
+function contextLabel(context: AgentMessageContext): string {
+  if (!context.file) return "whole change";
+  const name = context.file.split("/").pop() ?? context.file;
+  if (context.startLine == null) return name;
+  return `${name}:${context.startLine}${context.endLine != null && context.endLine !== context.startLine ? `–${context.endLine}` : ""}`;
+}
+
+// This controller stays mounted when changing tabs or presentation. Its single
+// composer, transcript, selection, and pending request survive panel ↔ widget.
+export const AgentDock = memo(function AgentDock({ targetKey, currentFile, currentChapterId, injection, container, active = true, onDock, onCollapse }: AgentDockProps) {
   const rpc = useRpc<typeof rpcContract>();
   const scopeProps = usePortalScopeProps();
-  const reducedMotion =
-    typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-
   const persisted = useMemo(() => loadPersisted(targetKey), [targetKey]);
-  const [open, setOpen] = useState(persisted?.open ?? false);
-  const [rect, setRect] = useState<Rect>(() => persisted?.rect ?? defaultRect(bounds()));
+  const [mode, setMode] = useState<"panel" | "widget">(persisted?.mode === "widget" ? "widget" : "panel");
+  const [rect, setRect] = useState<Rect>(() => persisted?.rect && [persisted.rect.x, persisted.rect.y, persisted.rect.w, persisted.rect.h].every(Number.isFinite) ? clampRect(persisted.rect, bounds()) : defaultRect(bounds()));
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [input, setInput] = useState("");
   const [chip, setChip] = useState<AgentMessageContext | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const mounted = useRef(true);
+  const locked = useRef(false);
+  const gestureCleanup = useRef<(() => void) | null>(null);
+  const readRevision = useRef(0);
+  const visible = active || mode === "widget";
 
-  useEffect(() => savePersisted(targetKey, { open, rect }), [targetKey, open, rect]);
-
-  const refresh = useCallback(() => {
-    rpc.call("getAgentMessages", { targetKey }).then((r) => setMessages(r.messages as AgentMessage[]));
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; gestureCleanup.current?.(); };
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem(`gr:agentdock:${targetKey}`, JSON.stringify({ mode, rect })); } catch { /* optional persistence */ }
+  }, [targetKey, mode, rect]);
+  useEffect(() => {
+    const resize = () => setRect((previous) => clampRect(previous, bounds()));
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+  const refresh = useCallback(async () => {
+    const revision = ++readRevision.current;
+    try {
+      const result = await rpc.call("getAgentMessages", { targetKey });
+      if (mounted.current && revision === readRevision.current) { setMessages(result.messages as AgentMessage[]); setLoaded(true); setLoadError(false); }
+    } catch { if (mounted.current && revision === readRevision.current) setLoadError(true); }
   }, [rpc, targetKey]);
-
+  useEffect(() => { if (visible) void refresh(); }, [visible, refresh]);
+  useRealtime(`agent:${targetKey}`, () => { if (visible) void refresh(); });
   useEffect(() => {
-    if (open) {
-      refresh();
-      // Open → ready to type: focus the composer immediately.
-      requestAnimationFrame(() => composerRef.current?.focus());
-    }
-  }, [open, refresh]);
-  useRealtime(`agent:${targetKey}`, refresh);
-
-  useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages, open]);
-
-  // Highlight-to-ask: a selection was captured elsewhere — open + load it.
+    if (!visible) return;
+    const frame = requestAnimationFrame(() => composerRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [visible, mode]);
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages, visible, mode]);
   useEffect(() => {
     if (!injection) return;
     setChip(injection.context);
-    setOpen(true);
-    requestAnimationFrame(() => composerRef.current?.focus());
-  }, [injection?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
+    const frame = requestAnimationFrame(() => composerRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [injection]);
 
-  const effectiveContext: AgentMessageContext | undefined =
-    chip ?? (currentFile ? { file: currentFile, chapterId: currentChapterId } : undefined);
-
+  const effectiveContext = chip ?? (currentFile ? { file: currentFile, chapterId: currentChapterId } : undefined);
   async function send() {
     const message = input.trim();
-    if (!message) return;
-    setBusy(true);
-    setInput("");
+    if (!message || locked.current) return;
+    locked.current = true; setBusy(true); setInput("");
     try {
-      await rpc.call("askAgent", { targetKey, message, context: effectiveContext });
-      setChip(null);
+      const context = effectiveContext && Object.fromEntries(Object.entries(effectiveContext).filter(([, value]) => value !== undefined));
+      await rpc.call("askAgent", { targetKey, message, ...(context ? { context } : {}) });
+      if (mounted.current) setChip(null);
+      // A transcript read failure is shown separately; it must never turn a
+      // successful send into a restored draft that could be sent a second time.
       await refresh();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "The agent could not answer");
-      setInput(message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The agent could not answer");
+      if (mounted.current) setInput(message);
     } finally {
-      setBusy(false);
+      locked.current = false;
+      if (mounted.current) setBusy(false);
     }
   }
-
-  async function openThread() {
-    try {
-      await rpc.call("openAgentThread", { targetKey });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not open the thread");
-    }
+  function dock() { gestureCleanup.current?.(); setMode("panel"); onDock?.(); }
+  function startGesture(event: React.PointerEvent, action: "move" | "resize") {
+    event.preventDefault(); gestureCleanup.current?.();
+    const start = { x: event.clientX, y: event.clientY, rect };
+    const move = (event: PointerEvent) => {
+      const dx = event.clientX - start.x, dy = event.clientY - start.y;
+      setRect(clampRect(action === "move" ? { ...start.rect, x: start.rect.x + dx, y: start.rect.y + dy } : { ...start.rect, w: start.rect.w + dx, h: start.rect.h + dy }, bounds()));
+    };
+    const finish = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", finish);
+      gestureCleanup.current = null;
+    };
+    gestureCleanup.current = finish;
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", finish); window.addEventListener("pointercancel", finish);
   }
 
-  // Pointer drag/resize, clamped to the viewport.
-  function startGesture(e: React.PointerEvent, mode: "move" | "resize") {
-    e.preventDefault();
-    const start = { px: e.clientX, py: e.clientY, ...rect };
-    function onMove(ev: PointerEvent) {
-      const dx = ev.clientX - start.px;
-      const dy = ev.clientY - start.py;
-      const next =
-        mode === "move"
-          ? { ...start, x: start.x + dx, y: start.y + dy }
-          : { ...start, w: start.w + dx, h: start.h + dy };
-      setRect(clampRect({ x: next.x, y: next.y, w: next.w, h: next.h }, bounds()));
-    }
-    function onUp() {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    }
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }
-
-  const fab = (
-    <button
-      type="button"
-      aria-label={open ? "Hide review agent" : "Ask the review agent"}
-      onClick={() => setOpen((o) => !o)}
-      className={cn(
-        "fixed bottom-5 right-5 z-[60] flex size-11 items-center justify-center rounded-full border border-border bg-foreground text-background shadow-lg",
-        !reducedMotion && "transition-transform hover:scale-105",
-      )}
-      {...scopeProps}
-    >
-      <Icon name="AiContentGenerator01" className="size-5" aria-hidden />
-    </button>
-  );
-
-  const window_ = open && (
-    <div
-      role="dialog"
-      aria-label="Review agent"
-      className={cn(
-        "fixed z-[61] flex flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl",
-        !reducedMotion && "transition-opacity",
-      )}
-      style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
-      {...scopeProps}
-    >
-      <div
-        className="flex cursor-move items-center gap-2 border-b border-border bg-muted/50 px-2.5 py-1.5"
-        onPointerDown={(e) => startGesture(e, "move")}
-      >
-        <Icon name="AiContentGenerator01" className="size-4 text-foreground" aria-hidden />
-        <span className="text-xs font-semibold text-foreground">Review agent</span>
-        <button
-          type="button"
-          onClick={openThread}
-          onPointerDown={(e) => e.stopPropagation()}
-          className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-state-hover hover:text-foreground"
-          title="Open the underlying thread in bb"
-        >
-          Open as thread
-          <Icon name="ArrowUpRight" className="size-3" aria-hidden />
-        </button>
-        <button
-          type="button"
-          aria-label="Minimize"
-          onClick={() => setOpen(false)}
-          onPointerDown={(e) => e.stopPropagation()}
-          className="rounded p-0.5 text-muted-foreground hover:bg-state-hover hover:text-foreground"
-        >
-          <Icon name="X" className="size-3.5" aria-hidden />
-        </button>
-      </div>
-
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5">
-        {messages.length === 0 && (
-          <p className="px-1 py-6 text-center text-xs text-muted-foreground">
-            Ask about this change — a chapter, a file, or a selection you highlight in the diff.
-          </p>
-        )}
-        {messages.map((m) => (
-          <div key={m.id} className={cn("flex flex-col gap-0.5", m.role === "user" ? "items-end" : "items-start")}>
-            {m.role === "user" && m.context && (
-              <span className="rounded-full bg-muted px-1.5 py-0 text-[10px] text-muted-foreground">
-                {contextLabel(m.context)}
-              </span>
-            )}
-            <div
-              className={cn(
-                "max-w-[85%] whitespace-pre-wrap rounded-lg px-2.5 py-1.5 text-xs",
-                m.role === "user" ? "bg-foreground text-background" : "bg-muted text-foreground",
-              )}
-            >
-              {m.text}
-            </div>
-          </div>
-        ))}
-        {busy && <div className="px-1 text-xs text-muted-foreground">Thinking…</div>}
-      </div>
-
-      <div className="border-t border-border p-2">
-        <div className="mb-1.5 flex items-center gap-1.5">
-          <span className="text-[10px] text-muted-foreground">Context:</span>
-          {effectiveContext ? (
-            <span className="flex items-center gap-1 rounded-full border border-border px-1.5 py-0 text-[10px] text-foreground">
-              {contextLabel(effectiveContext)}
-              {chip && (
-                <button
-                  type="button"
-                  aria-label="Clear selection context"
-                  onClick={() => setChip(null)}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <Icon name="X" className="size-2.5" aria-hidden />
-                </button>
-              )}
-            </span>
-          ) : (
-            <span className="text-[10px] text-muted-foreground">whole change</span>
-          )}
-        </div>
-        <div className="flex items-end gap-1.5">
-          <Textarea
-            ref={composerRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            placeholder="Ask the agent…  (Enter to send)"
-            className="max-h-28 min-h-[2.25rem] flex-1 resize-none text-xs"
-          />
-          <Button size="sm" disabled={busy || !input.trim()} onClick={send} aria-label="Send">
-            <Icon name="ArrowUp" className="size-4" aria-hidden />
-          </Button>
-        </div>
-      </div>
-
-      <div
-        role="separator"
-        aria-label="Resize"
-        onPointerDown={(e) => startGesture(e, "resize")}
-        className="absolute bottom-0 right-0 size-3.5 cursor-nwse-resize"
-        style={{ background: "linear-gradient(135deg, transparent 50%, var(--border) 50%)" }}
-      />
+  const conversation = <>
+    <div className={cn("flex shrink-0 items-center gap-2 border-b border-border px-3 py-2", mode === "widget" && "cursor-move")} onPointerDown={mode === "widget" ? (event) => startGesture(event, "move") : undefined}>
+      <Icon name="AiContentGenerator01" className="size-4 text-muted-foreground" aria-hidden />
+      <span className="text-sm font-medium">Review assistant</span>
+      <Button variant="ghost" size="sm" className="ml-auto" aria-label={mode === "widget" ? "Dock in review panel" : "Open assistant as widget"} onPointerDown={(event) => event.stopPropagation()} onClick={mode === "widget" ? dock : () => setMode("widget")}>
+        <Icon name={mode === "widget" ? "Minimize2" : "Maximize2"} className="size-3.5" aria-hidden />{mode === "widget" ? "Dock" : "Pop out"}
+      </Button>
+      {mode === "panel" && onCollapse && <Button variant="ghost" size="icon" className="hidden size-7 text-muted-foreground @min-[1024px]/review:inline-flex" aria-label="Collapse review panel" onClick={onCollapse}><Icon name="X" aria-hidden /></Button>}
     </div>
-  );
-
-  return createPortal(
-    <>
-      {fab}
-      {window_}
-    </>,
-    container ?? document.body,
-  );
+    <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3" aria-busy={busy}>
+      {loadError && <div role="alert" className="space-y-2 text-sm"><p>Couldn’t load the conversation. Your saved messages are still in BB.</p><Button variant="outline" size="sm" onClick={() => void refresh()}>Retry conversation</Button></div>}
+      {!loaded && !loadError && <p role="status" className="text-sm text-muted-foreground">Loading conversation…</p>}
+      {loaded && !messages.length && <div className="space-y-2 py-4 text-sm leading-relaxed"><p>Ask about this change.</p><p className="text-muted-foreground">Discuss the current file, check a risk, or select lines in the diff for a focused question. Your conversation stays with this review.</p></div>}
+      {messages.map((message) => <div key={message.id} className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span className="font-medium">{message.role === "user" ? "You" : "Assistant"}</span>{message.role === "user" && message.context && <span className="break-all">{contextLabel(message.context)}</span>}</div>
+        <p className={cn("whitespace-pre-wrap break-words text-sm leading-relaxed", message.role === "user" && "rounded-md bg-muted px-3 py-2")}>{message.text}</p>
+      </div>)}
+      {busy && <p role="status" className="text-sm text-muted-foreground">Thinking…</p>}
+    </div>
+    <div className="shrink-0 space-y-2 border-t border-border p-3">
+      <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"><span className="shrink-0">Context</span><span className="truncate text-foreground">{effectiveContext ? contextLabel(effectiveContext) : "whole change"}</span>{chip && <Button variant="ghost" size="sm" className="h-6 px-1" aria-label="Clear selection context" onClick={() => setChip(null)}><Icon name="X" className="size-3" aria-hidden /></Button>}</div>
+      <div className="flex items-end gap-2">
+        <Textarea ref={composerRef} aria-label="Ask the agent" disabled={busy} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
+        }} placeholder="Ask the agent…" className="max-h-32 min-h-20 flex-1 resize-none text-sm" />
+        <Button size="sm" disabled={busy || !input.trim()} onClick={() => void send()} aria-label="Send"><Icon name="ArrowUp" className="size-4" aria-hidden /></Button>
+      </div>
+      <p className="text-xs text-muted-foreground">Enter to send · Shift+Enter for a new line</p>
+    </div>
+  </>;
+  const widget = mode === "widget" && createPortal(<div role="dialog" aria-label="Review agent" {...scopeProps} className="fixed z-[61] flex flex-col overflow-hidden rounded-lg border border-border shadow-2xl" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, backgroundColor: "rgb(from var(--background) r g b / 1)" }}>
+    {conversation}
+    <div role="separator" tabIndex={0} aria-label="Resize assistant widget" aria-orientation="horizontal" onPointerDown={(event) => startGesture(event, "resize")} onKeyDown={(event) => {
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+      event.preventDefault(); setRect((rect) => clampRect({ ...rect, w: rect.w + (event.key === "ArrowRight" ? 20 : event.key === "ArrowLeft" ? -20 : 0), h: rect.h + (event.key === "ArrowDown" ? 20 : event.key === "ArrowUp" ? -20 : 0) }, bounds()));
+    }} className="absolute bottom-0 right-0 size-3 cursor-nwse-resize border-b-2 border-r-2 border-muted-foreground focus-visible:outline focus-visible:outline-ring" />
+  </div>, container ?? document.body);
+  return <>
+    <section aria-label="Review assistant" hidden={!active} className={cn("flex min-h-0 flex-1 flex-col", !active && "hidden")}>
+      {mode === "panel" ? conversation : <><div className="hidden h-11 shrink-0 items-center border-b border-border px-3 @min-[1024px]/review:flex"><h2 className="flex-1 text-xs font-medium">Ask agent</h2>{onCollapse && <Button variant="ghost" size="icon" className="size-7 text-muted-foreground" aria-label="Collapse review panel" onClick={onCollapse}><Icon name="X" aria-hidden /></Button>}</div><div className="space-y-3 p-3 text-sm"><p className="text-muted-foreground">The assistant is open as a widget.</p><Button variant="outline" size="sm" onClick={dock}>Dock in review panel</Button></div></>}
+    </section>
+    {widget}
+  </>;
 });
 AgentDock.displayName = "AgentDock";

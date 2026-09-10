@@ -1,3 +1,12 @@
 dist/*.map
 node_modules/
 .superpowers/
+
+# Local symlinks and credentials
+node_modules
+.env
+.env.*
+!.env.example
+
+# Local browser verification artifacts
+docs/verification/

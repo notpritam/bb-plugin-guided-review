@@ -10,7 +10,7 @@ import {
   preventOverlayTriggerSelection,
 } from "./overlay-trigger.js";
 import { useIsCompactViewport } from "./hooks/use-compact-viewport.js";
-import { usePortalScopeProps } from "../../lib/portal-scope.js";
+import { useFullscreenPortalContainer, usePortalScopeProps } from "../../lib/portal-scope.js";
 import { cn } from "../../lib/utils.js";
 
 // ---------------------------------------------------------------------------
@@ -488,6 +488,7 @@ export function PersistentResponsiveDrawerShell({
   const settledStateRef = React.useRef<boolean | null>(null);
   const labelId = React.useId();
   const portalScopeProps = usePortalScopeProps();
+  const fullscreenContainer = useFullscreenPortalContainer();
   const transition = `transform ${motionDurationMs}ms ${PERSISTENT_DRAWER_EASING}`;
   const backdropTransition = `opacity ${motionDurationMs}ms ${PERSISTENT_DRAWER_EASING}`;
   const onOpenChangeRef = React.useRef(onOpenChange);
@@ -645,7 +646,7 @@ export function PersistentResponsiveDrawerShell({
     [requestClose, setDragPosition],
   );
 
-  const portalTarget = typeof document === "undefined" ? null : document.body;
+  const portalTarget = fullscreenContainer ?? (typeof document === "undefined" ? null : document.body);
   if (portalTarget === null) {
     return null;
   }

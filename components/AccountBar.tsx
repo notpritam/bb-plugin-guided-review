@@ -3,6 +3,8 @@ import { useRpc, useRealtime } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import { Button } from "./ui/button";
+import { Icon } from "./ui/icon";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 export const AccountBar = memo(function AccountBar() {
   const rpc = useRpc<typeof rpcContract>();
@@ -48,32 +50,33 @@ export const AccountBar = memo(function AccountBar() {
     }
   }
 
-  const others = accounts.filter((a) => !a.active);
+  const label = loading ? "Checking account…" : failed ? "Account unavailable" : active ? `@${active}` : "Connect GitHub";
 
   return (
-    <div className="flex w-full flex-wrap items-center gap-2 border-b border-border pb-3 text-sm">
-      <span className="text-muted-foreground">GitHub:</span>
-      <span className="font-medium text-foreground" role="status">{loading ? "Checking account…" : failed ? "Account check unavailable" : active ? `@${active}` : "No account connected"}</span>
-      {!loading && (failed || !active) && <Button variant="outline" size="sm" onClick={refetch}>Check again</Button>}
-      {!loading && !active && <p className="w-full text-xs leading-relaxed text-muted-foreground">Run <code className="font-mono">gh auth login</code> on the BB server to connect GitHub. Local git reviews work without GitHub.</p>}
-      {others.length > 0 && (
-        <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
-          <span className="text-xs text-muted-foreground">Use on this BB server:</span>
-          {others.map((a) => (
-            <Button
-              key={a.login}
-              variant="outline"
-              size="sm"
-              disabled={switching !== null}
-              aria-label={`Use @${a.login} on this BB server`}
-              onClick={() => switchTo(a.login)}
-            >
-              {switching === a.login ? "Switching…" : `@${a.login}`}
-            </Button>
-          ))}
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="shrink-0 gap-1.5" aria-label={`GitHub account: ${label}`}>
+          <Icon name="Github" className="size-4" aria-hidden />
+          <span className="hidden max-w-40 truncate @min-[520px]/review-list:inline">{label}</span>
+          <Icon name="ChevronDown" className="size-3" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 max-w-[calc(100vw-24px)] space-y-3 p-3">
+        <div className="space-y-1">
+          <p className="text-sm font-medium">GitHub account</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">Reviews are submitted using this BB server’s active account.</p>
         </div>
-      )}
-    </div>
+        <p role="status" className="text-sm">{loading ? "Checking account…" : failed ? "Account check unavailable" : active ? `Signed in as @${active}` : "No account connected"}</p>
+        {!loading && (failed || !active) && <Button variant="outline" size="sm" onClick={refetch}>Check again</Button>}
+        {!loading && !active && <p className="text-xs leading-relaxed text-muted-foreground">Run <code className="font-mono">gh auth login</code> on the BB server to connect GitHub. Local git reviews work without GitHub.</p>}
+        {accounts.some((account) => !account.active) && <div className="space-y-1 border-t border-border pt-2">
+          {accounts.map((account) => <Button key={account.login} variant="ghost" size="sm" className="w-full justify-between" disabled={switching !== null || account.active} aria-label={account.active ? `Current account @${account.login}` : `Use @${account.login} on this BB server`} onClick={() => void switchTo(account.login)}>
+            <span className="truncate">{switching === account.login ? "Switching…" : `@${account.login}`}</span>
+            {account.active && <Icon name="Check" className="size-4" aria-hidden />}
+          </Button>)}
+        </div>}
+      </PopoverContent>
+    </Popover>
   );
 });
 AccountBar.displayName = "AccountBar";

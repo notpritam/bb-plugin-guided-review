@@ -1,4 +1,5 @@
 import { memo, useState } from "react";
+import { reviewState } from "../lib/review-state";
 import { cn } from "../lib/utils";
 
 type ChecksSummary = { bucket: string; checks: any[] } | null | undefined;
@@ -30,13 +31,6 @@ function CiBadge({ checks }: { checks: ChecksSummary }) {
   );
 }
 
-/** Small one-line generation-status pill; hidden once the review is ready. */
-function StatusPill({ status }: { status?: string }) {
-  if (status === "generating") return <span className="text-[10px] text-muted-foreground">Generating…</span>;
-  if (status === "error") return <span className="text-[10px] font-medium text-destructive">Failed</span>;
-  return null;
-}
-
 const INTENT_TOGGLE_THRESHOLD = 160;
 
 export const ReviewHeader = memo(function ReviewHeader({
@@ -60,7 +54,7 @@ export const ReviewHeader = memo(function ReviewHeader({
         </h2>
         <div className="flex shrink-0 items-center gap-2">
           <CiBadge checks={checks} />
-          <StatusPill status={review.status} />
+          <span className="text-xs font-medium text-muted-foreground">{reviewState(review).label === "Ready" ? null : reviewState(review).label}</span>
         </div>
       </div>
       <p className="text-xs text-muted-foreground">

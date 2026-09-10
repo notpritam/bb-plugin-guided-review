@@ -1,18 +1,27 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
-import type { Draft, Verdict } from "../src/draft";
+import { reviewState, type ReviewItem } from "../lib/review-state";
+import type { Draft, DraftComment, Verdict } from "../src/draft";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 import { Icon } from "./ui/icon";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { ReviewerNotes } from "./ReviewerNotes";
+import { cn } from "../lib/utils";
+import { AgentDock, type AgentDockProps } from "./AgentDock";
+import { getReviewState, patchReviewState } from "../lib/panel-state";
+import { readDraftRecovery, updateDraftRecovery } from "../lib/draft-recovery";
+import { usePortalScopeProps } from "../lib/portal-scope";
 
 export interface CommentPrefill { file: string; line: number; side: "LEFT" | "RIGHT"; nonce: number; }
 
-export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, activeFiles, prefill, isLocal = false }: {
-  targetKey: string; activeChapterId: string; activeFiles: string[]; prefill?: CommentPrefill; isLocal?: boolean;
+export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, activeFiles, prefill, isLocal = false, review, onSubmitted, onSelectFile, agent, reviewRevision, account }: {
+  targetKey: string; activeChapterId: string; activeFiles: string[]; prefill?: CommentPrefill; isLocal?: boolean; review?: ReviewItem; onSubmitted?: () => void; onSelectFile?: (file: string) => void;
+  reviewRevision?: string; account?: string;
+  agent?: Omit<AgentDockProps, "targetKey" | "active" | "onDock" | "onCollapse">;
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const [draft, setDraft] = useState<Draft>({ targetKey, verdict: "COMMENT", body: "", comments: [] });
@@ -25,13 +34,48 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
   const [side, setSide] = useState<"LEFT" | "RIGHT">("RIGHT");
   const [body, setBody] = useState("");
   const [showComposer, setShowComposer] = useState(false);
+  const [editing, setEditing] = useState<DraftComment | null>(null);
+  const [writeAnother, setWriteAnother] = useState(false);
+  const [receipt, setReceipt] = useState<Verdict | null>(null);
   const [showNotes, setShowNotes] = useState(false);
+  const [tab, setTab] = useState<"draft" | "notes" | "agent">(() => {
+    const saved = getReviewState(targetKey).activeTool;
+    return saved === "notes" || saved === "agent" && agent ? saved : "draft";
+  });
+  const [toolsOpen, setToolsOpen] = useState(() => getReviewState(targetKey).toolsOpen !== false);
+  const panelId = useId();
+  const railRef = useRef<HTMLDivElement>(null);
+  const scopeProps = usePortalScopeProps();
+  useEffect(() => { patchReviewState(targetKey, { activeTool: tab, toolsOpen }); }, [targetKey, tab, toolsOpen]);
+  useEffect(() => { if (agent?.injection) { setTab("agent"); setToolsOpen(true); } }, [agent?.injection]);
+  function collapse() {
+    setToolsOpen(false);
+    railRef.current?.querySelector<HTMLButtonElement>(`[data-tool="${tab}"]`)?.focus();
+  }
+  function selectTool(next: typeof tab) {
+    if (toolsOpen && tab === next) collapse();
+    else { setTab(next); setToolsOpen(true); }
+  }
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const mounted = useRef(true);
   const lock = useRef(false);
   const writes = useRef<Promise<unknown>>(Promise.resolve());
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const revisionRef = useRef(reviewRevision); revisionRef.current = reviewRevision;
+  const summaryRevision = useRef(reviewRevision);
+  const summaryRecoveryId = useRef<string | undefined>(undefined);
+  const composerRevision = useRef(reviewRevision);
   const summary = useRef({ verdict: "COMMENT" as Verdict, body: "", revision: 0, dirty: false });
+
+  useEffect(() => {
+    if (!loaded) return;
+    updateDraftRecovery(targetKey, { composer: body ? { file, line, side, body, revision: composerRevision.current } : undefined });
+  }, [loaded, targetKey, file, line, side, body]);
+  useEffect(() => {
+    const protect = (event: BeforeUnloadEvent) => { if (body.trim() || summary.current.dirty) event.preventDefault(); };
+    window.addEventListener("beforeunload", protect);
+    return () => window.removeEventListener("beforeunload", protect);
+  }, [body]);
 
   const enqueue = useCallback(<T,>(operation: () => Promise<T>) => {
     const next = writes.current.catch(() => {}).then(operation);
@@ -45,15 +89,20 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
     const current = summary.current;
     if (!current.dirty) return writes.current;
     const { verdict, body, revision } = current;
+    const viewedRevision = summaryRevision.current;
+    const recoveryId = summaryRecoveryId.current;
     current.dirty = false;
     return enqueue(async () => {
       try {
-        await rpc.call("setVerdict", { targetKey, verdict, body });
-        if (mounted.current && summary.current.revision === revision) setSaved("Draft saved");
+        await rpc.call("setVerdict", { targetKey, verdict, body, ...(viewedRevision ? { revision: viewedRevision } : {}) });
+        if (summary.current.revision === revision) {
+          if (recoveryId && readDraftRecovery(targetKey).summary?.editId === recoveryId) updateDraftRecovery(targetKey, { summary: undefined });
+          if (mounted.current) setSaved("Draft saved");
+        }
       } catch (error) {
         if (summary.current.revision === revision) {
           summary.current.dirty = true;
-          if (mounted.current) setSaved("Couldn’t save notes. Try again.");
+          if (mounted.current) setSaved(error instanceof Error ? `Couldn’t save summary. ${error.message}` : "Couldn’t save summary. Try again.");
         }
         throw error;
       }
@@ -66,8 +115,20 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
       const result = await rpc.call("getDraft", { targetKey });
       if (!mounted.current) return;
       const next = result.draft as Draft;
-      setDraft(next);
-      summary.current = { verdict: next.verdict, body: next.body, revision: 0, dirty: false };
+      const recovered = readDraftRecovery(targetKey);
+      setDraft({ ...next, ...(recovered.summary ? { verdict: recovered.summary.verdict, body: recovered.summary.body } : {}) });
+      summary.current = { verdict: recovered.summary?.verdict ?? next.verdict, body: recovered.summary?.body ?? next.body, revision: 0, dirty: !!recovered.summary };
+      if (recovered.summary) {
+        summaryRevision.current = recovered.summary.revision;
+        summaryRecoveryId.current = recovered.summary.editId;
+        setShowNotes(true);
+        setSaved("Couldn’t save earlier edits. Recovered in this tab; check the revision before saving again.");
+      }
+      if (recovered.composer) {
+        const comment = recovered.composer;
+        composerRevision.current = comment.revision;
+        setFile(comment.file); setLine(comment.line); setSide(comment.side); setBody(comment.body); setShowComposer(true);
+      }
       setLoaded(true);
     } catch {
       if (mounted.current) setLoadError(true);
@@ -80,17 +141,22 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
     return () => { mounted.current = false; void flush().catch(() => {}); };
   }, [load, flush]);
 
-  useEffect(() => { setFile(activeFiles[0] ?? ""); }, [activeFiles]);
+  useEffect(() => { if (!showComposer && !body.trim()) setFile(activeFiles[0] ?? ""); }, [activeFiles, showComposer, body]);
   useEffect(() => {
     if (!prefill) return;
-    setShowComposer(true); setFile(prefill.file); setLine(String(prefill.line)); setSide(prefill.side);
+    setTab("draft"); setToolsOpen(true); setShowComposer(true);
+    if (body.trim()) toast.info("Finish or cancel the comment you’re writing first.");
+    else { composerRevision.current = revisionRef.current; setEditing(null); setFile(prefill.file); setLine(String(prefill.line)); setSide(prefill.side); }
     const frame = requestAnimationFrame(() => bodyRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [prefill]);
 
   function updateSummary(change: Partial<Pick<Draft, "verdict" | "body">>) {
     setDraft((previous) => ({ ...previous, ...change }));
+    summaryRevision.current = revisionRef.current;
     summary.current = { ...summary.current, ...change, revision: summary.current.revision + 1, dirty: true };
+    summaryRecoveryId.current = crypto.randomUUID();
+    updateDraftRecovery(targetKey, { summary: { editId: summaryRecoveryId.current, verdict: summary.current.verdict, body: summary.current.body, revision: summaryRevision.current } });
     setSaved("Saving draft…");
     if (pending.current) clearTimeout(pending.current);
     pending.current = setTimeout(() => { void flush().catch(() => {}); }, 400);
@@ -110,8 +176,8 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
   async function addComment() {
     if (!file.trim() || !body.trim() || !Number.isInteger(Number(line)) || Number(line) < 1) return;
     await mutate(async () => {
-      const result = await enqueue(() => rpc.call("saveDraftComment", { targetKey, comment: { file, line: Number(line), side, chapterId: activeChapterId, body: body.trim() } }));
-      updateComments(result.draft as Draft); setBody("");
+      const result = await enqueue(() => rpc.call("saveDraftComment", { targetKey, ...(composerRevision.current ? { revision: composerRevision.current } : {}), comment: { file, line: Number(line), side, chapterId: editing?.chapterId ?? activeChapterId, body: body.trim() } }));
+      updateComments(result.draft as Draft); setBody(""); setEditing(null); setShowComposer(false);
     });
   }
   async function removeComment(index: number) {
@@ -124,51 +190,92 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
     if (isLocal || !loaded || body.trim()) return;
     await mutate(async () => {
       await flush();
-      const result = await enqueue(() => rpc.call("submitReview", { targetKey }));
-      if (!result.ok) { toast.error(result.error ?? "Submit failed. Your draft is still here."); return; }
+      const result = await enqueue(() => rpc.call("submitReview", { targetKey, ...(reviewRevision ? { revision: reviewRevision } : {}), ...(account ? { account } : {}) }));
+      if (!result.ok) { setSaved(result.error ?? "Submit failed. Your draft is still here."); toast.error(result.error ?? "Submit failed. Your draft is still here."); return; }
+      setReceipt(summary.current.verdict);
+      setWriteAnother(false);
+      onSubmitted?.();
       toast.success("Review submitted to GitHub");
       await load();
       setSaved("Review submitted");
     });
   }
 
-  if (loadError) return <div role="alert" className="flex flex-wrap items-center gap-3 border-t border-border p-3 text-sm"><span>Couldn’t load your draft. Editing is paused to protect it.</span><Button variant="outline" onClick={() => void load()}>Retry draft</Button></div>;
-  if (!loaded) return <p role="status" className="border-t border-border p-3 text-sm text-muted-foreground">Loading draft…</p>;
-
   const hasReview = draft.comments.length > 0 || draft.body.trim().length > 0 || draft.verdict === "APPROVE";
-  return (
-    <section aria-label="Review draft" className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-border bg-background">
-      <div className="flex flex-wrap items-center gap-3 p-3">
-        <span className="text-sm font-medium">{draft.comments.length} draft comment{draft.comments.length === 1 ? "" : "s"}</span>
-        <span role="status" className="text-xs text-muted-foreground">{saved}</span>
-        {saved.startsWith("Couldn’t") && <Button variant="outline" size="sm" onClick={() => void flush().catch(() => {})}>Save again</Button>}
-        {!isLocal && <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
-          <Select disabled={busy} value={draft.verdict} onValueChange={(value) => updateSummary({ verdict: value as Verdict })}>
-            <SelectTrigger aria-label="Review verdict" className="h-10 w-40 text-sm"><SelectValue /></SelectTrigger>
-            <SelectContent><SelectItem value="COMMENT">Comment</SelectItem><SelectItem value="APPROVE">Approve</SelectItem><SelectItem value="REQUEST_CHANGES">Request changes</SelectItem></SelectContent>
-          </Select>
-          <Button disabled={busy || !hasReview || !!body.trim()} onClick={() => void submit()}>{busy ? "Saving…" : "Submit to GitHub"}</Button>
-        </div>}
-      </div>
-      <p className="px-3 pb-3 text-xs leading-relaxed text-muted-foreground">{isLocal ? "Local review. Comments and notes stay in this BB installation." : body.trim() ? "Add the comment you’re writing to the draft before submitting." : "Drafts stay in BB until you submit. GitHub actions use this server’s active GitHub CLI account."}</p>
-      <div className="border-t border-border px-3 py-2">
-        <Button variant="ghost" size="sm" aria-expanded={showComposer} onClick={() => setShowComposer((value) => !value)}><Icon name={showComposer ? "ChevronDown" : "Plus"} className="size-4" aria-hidden /> Draft comments</Button>
-        {showComposer && <div className="mt-3 space-y-3">
-          {draft.comments.length > 0 && <ul className="space-y-2 text-sm">{draft.comments.map((comment, index) => <li key={index} className="flex items-start gap-3 rounded-md border border-border p-3"><div className="min-w-0 flex-1"><p className="break-all text-xs text-muted-foreground">{comment.file}:{comment.line} · {comment.side === "LEFT" ? "Original" : "Changed"}</p><p className="mt-1 whitespace-pre-wrap break-words">{comment.body}</p></div><Button variant="ghost" size="sm" disabled={busy} aria-label={`Remove comment on ${comment.file}:${comment.line}`} onClick={() => void removeComment(index)}><Icon name="X" className="size-4" aria-hidden /></Button></li>)}</ul>}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_80px_140px]">
-            <label className="space-y-1 text-xs text-muted-foreground">File<Input aria-label="Comment file" disabled={busy} value={file} onChange={(event) => setFile(event.target.value)} /></label>
-            <label className="space-y-1 text-xs text-muted-foreground">Line<Input aria-label="Comment line" disabled={busy} type="number" min={1} value={line} onChange={(event) => setLine(event.target.value)} /></label>
-            <label className="space-y-1 text-xs text-muted-foreground">Side<select aria-label="Comment side" disabled={busy} className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground" value={side} onChange={(event) => setSide(event.target.value as "LEFT" | "RIGHT")}><option value="RIGHT">Changed lines</option><option value="LEFT">Original lines</option></select></label>
+  const submittedVerdict = review ? review.submittedVerdict : receipt;
+  const closed = review?.prState === "MERGED" || review?.prState === "CLOSED";
+  const completed = submittedVerdict && !hasReview && !writeAnother && !body.trim();
+  const toolItems = [
+    { id: "draft", label: "Draft comments", icon: "MessageSquare", count: draft.comments.length },
+    { id: "notes", label: "Reviewer notes", icon: "EditFile", count: 0 },
+    ...(agent ? [{ id: "agent", label: "Ask agent", icon: "MessageQuestion", count: 0 }] as const : []),
+  ] as const;
+  return <aside aria-label="Review tools" className={cn("flex max-h-[50vh] min-h-0 shrink-0 flex-col border-t border-border bg-background @min-[1024px]/review:h-full @min-[1024px]/review:max-h-none @min-[1024px]/review:flex-row-reverse @min-[1024px]/review:border-l @min-[1024px]/review:border-t-0", toolsOpen ? "@min-[1024px]/review:w-[384px]" : "@min-[1024px]/review:w-11", toolsOpen && tab === "agent" && "h-[50vh]")}>
+    <div ref={railRef} role="group" aria-label="Review tools" className={cn("flex h-11 shrink-0 items-center gap-0.5 bg-muted/20 p-0.5 @min-[1024px]/review:h-full @min-[1024px]/review:w-11 @min-[1024px]/review:flex-col", toolsOpen && "border-b border-border @min-[1024px]/review:border-b-0 @min-[1024px]/review:border-l")}>
+      <Tooltip.Provider delayDuration={350}>
+        {toolItems.map((tool) => <Tooltip.Root key={tool.id}>
+          <Tooltip.Trigger asChild>
+            <Button variant="ghost" size="icon" data-tool={tool.id} aria-label={tool.label} aria-pressed={toolsOpen && tab === tool.id} aria-expanded={toolsOpen && tab === tool.id} aria-controls={panelId} onClick={() => selectTool(tool.id)} className={cn("relative size-10 shrink-0 rounded-none text-muted-foreground [&_svg]:size-[18px]", toolsOpen && tab === tool.id && "after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-primary @min-[1024px]/review:after:inset-y-2 @min-[1024px]/review:after:left-auto @min-[1024px]/review:after:right-0 @min-[1024px]/review:after:h-auto @min-[1024px]/review:after:w-0.5")}>
+              <Icon name={tool.icon} aria-hidden />
+              {tool.count > 0 && <span aria-hidden className="absolute right-0.5 top-0.5 min-w-3.5 rounded-full bg-foreground px-0.5 text-center text-[10px] leading-[14px] text-background">{tool.count > 99 ? "99+" : tool.count}</span>}
+            </Button>
+          </Tooltip.Trigger>
+          <Tooltip.Portal container={agent?.container ?? undefined}><Tooltip.Content {...scopeProps} side="left" sideOffset={8} collisionPadding={8} className="z-[75] rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md">{tool.label}{tool.count > 0 ? ` (${tool.count})` : ""}</Tooltip.Content></Tooltip.Portal>
+        </Tooltip.Root>)}
+      </Tooltip.Provider>
+      <span className="ml-auto min-w-0 truncate px-2 text-xs text-muted-foreground @min-[1024px]/review:hidden">{toolsOpen ? toolItems.find((tool) => tool.id === tab)?.label : "Review tools"}</span>
+      {toolsOpen && <Button variant="ghost" size="icon" className="size-8 shrink-0 text-muted-foreground @min-[1024px]/review:hidden" aria-label="Collapse review panel" onClick={collapse}><Icon name="X" aria-hidden /></Button>}
+    </div>
+    <div id={panelId} hidden={!toolsOpen} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", !toolsOpen && "hidden")}>
+      {tab !== "agent" && <div className="hidden h-11 shrink-0 items-center gap-2 border-b border-border px-3 @min-[1024px]/review:flex"><h2 className="min-w-0 flex-1 truncate text-xs font-medium">{tab === "draft" ? "Draft comments" : "Reviewer notes"}</h2><Button variant="ghost" size="icon" className="size-7 text-muted-foreground" aria-label="Collapse review panel" onClick={collapse}><Icon name="X" aria-hidden /></Button></div>}
+    {agent && <AgentDock targetKey={targetKey} {...agent} active={toolsOpen && tab === "agent"} onDock={() => { setTab("agent"); setToolsOpen(true); }} onCollapse={collapse} />}
+    <div hidden={tab !== "notes"} className={cn("min-h-0 overflow-y-auto", tab !== "notes" && "hidden")}><ReviewerNotes targetKey={targetKey} /></div>
+    <div hidden={tab !== "draft"} className={cn("min-h-0 flex-1 overflow-y-auto", tab !== "draft" && "hidden")}>
+      {loadError ? <div role="alert" className="space-y-3 p-3 text-sm"><p>Couldn’t load your draft. Editing is paused to protect it.</p><Button variant="outline" onClick={() => void load()}>Retry draft</Button></div> : !loaded ? <p role="status" className="p-3 text-sm text-muted-foreground">Loading draft…</p> : closed ?
+        <section aria-label="Archived review" className="space-y-2 p-3">
+          <p className="text-sm font-medium">{review?.prState === "MERGED" ? "Merged" : "Closed"} · Archived</p>
+          <p className="text-xs text-muted-foreground">This review is saved in Archive. The guide, notes, and conversation remain available.</p>
+          {(draft.comments.length > 0 || draft.body) && <details className="text-sm"><summary className="cursor-pointer">Unsubmitted draft</summary><p className="mt-2 whitespace-pre-wrap">{draft.body}</p>{draft.comments.map((comment, index) => <p key={index} className="mt-2 break-words">{comment.file}:{comment.line} — {comment.body}</p>)}</details>}
+        </section> : completed ?
+        <section aria-label="Submitted review" className="space-y-3 p-3">
+          <p className="flex items-center gap-2 text-sm font-medium"><Icon name="Check" className="size-4" aria-hidden />{reviewState({ targetKey, ...review, submittedVerdict }).label}</p>
+          <p className="text-xs text-muted-foreground">Review submitted to GitHub</p>
+          <Button variant="outline" size="sm" onClick={() => setWriteAnother(true)}>Add another review</Button>
+        </section> : <section aria-label="Review draft" className="flex flex-col">
+          <div className="space-y-3 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2"><span role="status" className="text-xs text-muted-foreground">{saved}</span><Button variant="ghost" size="sm" aria-expanded={showComposer} onClick={() => setShowComposer(true)}><Icon name="Plus" className="size-4" aria-hidden /> Add comment</Button></div>
+            {saved.startsWith("Couldn’t") && <Button variant="outline" size="sm" onClick={() => void flush().catch(() => {})}>Save again</Button>}
+            {draft.comments.length ? <ul className="divide-y divide-border text-sm">{draft.comments.map((comment, index) => <li key={`${comment.file}:${comment.line}:${comment.side}`} className="space-y-2 py-3 first:pt-0">
+              <button type="button" className="block w-full break-all text-left text-xs text-muted-foreground hover:text-foreground hover:underline" onClick={() => onSelectFile?.(comment.file)}>{comment.file}:{comment.line} · {comment.side === "LEFT" ? "Original" : "Changed"}</button>
+              <p className="whitespace-pre-wrap break-words">{comment.body}</p>
+              <div className="flex gap-1"><Button variant="ghost" size="sm" disabled={busy || !!body.trim()} aria-label={`Edit comment on ${comment.file}:${comment.line}`} onClick={() => { composerRevision.current = revisionRef.current; setEditing(comment); setFile(comment.file); setLine(String(comment.line)); setSide(comment.side); setBody(comment.body); setShowComposer(true); requestAnimationFrame(() => bodyRef.current?.focus()); }}>Edit</Button><Button variant="ghost" size="sm" disabled={busy} aria-label={`Remove comment on ${comment.file}:${comment.line}`} onClick={() => void removeComment(index)}>Remove</Button></div>
+            </li>)}</ul> : !showComposer && <p className="py-4 text-sm leading-relaxed text-muted-foreground">Select a line in the diff or add a comment here.</p>}
+            {showComposer && <div className="space-y-3 border-t border-border pt-3">
+              <label className="block space-y-1 text-xs text-muted-foreground">File<Input aria-label="Comment file" disabled={busy || !!editing} value={file} onChange={(event) => setFile(event.target.value)} /></label>
+              <div className="grid grid-cols-[80px_minmax(0,1fr)] gap-3">
+                <label className="space-y-1 text-xs text-muted-foreground">Line<Input aria-label="Comment line" disabled={busy || !!editing} type="number" min={1} value={line} onChange={(event) => setLine(event.target.value)} /></label>
+                <label className="space-y-1 text-xs text-muted-foreground">Side<select aria-label="Comment side" disabled={busy || !!editing} className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground" value={side} onChange={(event) => setSide(event.target.value as "LEFT" | "RIGHT")}><option value="RIGHT">Changed lines</option><option value="LEFT">Original lines</option></select></label>
+              </div>
+              <Textarea ref={bodyRef} aria-label="Draft comment" disabled={busy} value={body} onChange={(event) => { if (!body) composerRevision.current = revisionRef.current; setBody(event.target.value); }} placeholder="What should the author know?" />
+              <div className="flex flex-wrap gap-2"><Button disabled={busy || !file.trim() || !body.trim() || !Number.isInteger(Number(line)) || Number(line) < 1} onClick={() => void addComment()}>{editing ? "Save comment" : "Add to draft"}</Button><Button variant="ghost" disabled={busy} onClick={() => { setBody(""); setEditing(null); setShowComposer(false); }}>Cancel</Button></div>
+            </div>}
           </div>
-          <Textarea ref={bodyRef} aria-label="Draft comment" disabled={busy} value={body} onChange={(event) => setBody(event.target.value)} placeholder="What should the author know?" />
-          <Button disabled={busy || !file.trim() || !body.trim() || !Number.isInteger(Number(line)) || Number(line) < 1} onClick={() => void addComment()}>Add to draft</Button>
-        </div>}
-      </div>
-      <div className="border-t border-border px-3 py-2">
-        <Button variant="ghost" size="sm" aria-expanded={showNotes} onClick={() => setShowNotes((value) => !value)}><Icon name={showNotes ? "ChevronDown" : "Plus"} className="size-4" aria-hidden /> Review notes</Button>
-        {showNotes ? <Textarea aria-label="Review summary" disabled={busy} value={draft.body} onChange={(event) => updateSummary({ body: event.target.value })} onBlur={() => void flush().catch(() => {})} placeholder={isLocal ? "Notes for this local review" : "Summary to include with your GitHub review"} className="mt-2" /> : draft.body.trim() && <p className="mt-1 truncate text-sm text-muted-foreground">{draft.body}</p>}
-      </div>
-    </section>
-  );
+          <div className="space-y-3 border-t border-border p-3">
+            <Button variant="ghost" size="sm" aria-expanded={showNotes} onClick={() => setShowNotes((value) => !value)}><Icon name={showNotes ? "ChevronDown" : "Plus"} className="size-4" aria-hidden /> Review summary</Button>
+            {showNotes ? <label className="block space-y-2"><span className="text-xs text-muted-foreground">{isLocal ? "Saved with your local draft." : "Included with your GitHub review."}</span><Textarea aria-label="Review summary" disabled={busy} value={draft.body} onChange={(event) => updateSummary({ body: event.target.value })} onBlur={() => void flush().catch(() => {})} placeholder={isLocal ? "Summary of this review" : "What should the author know overall?"} /></label> : draft.body.trim() && <p className="line-clamp-3 whitespace-pre-wrap text-sm text-muted-foreground">{draft.body}</p>}
+          </div>
+          <div className="space-y-3 border-t border-border p-3">
+            {!isLocal && <>
+              <div role="group" aria-label="Review verdict" className="flex max-w-full flex-wrap items-center gap-1 rounded-md border border-border p-1">
+                {([["APPROVE", "Approve"], ["COMMENT", "Comment"], ["REQUEST_CHANGES", "Request changes"]] as const).map(([verdict, label]) => <Button key={verdict} type="button" variant="ghost" size="sm" disabled={busy} aria-pressed={draft.verdict === verdict} onClick={() => { updateSummary({ verdict }); if (verdict === "REQUEST_CHANGES") setShowNotes(true); }}>{label}</Button>)}
+              </div>
+              <Button className="w-full" disabled={busy || !hasReview || !!body.trim()} onClick={() => void submit()}>{busy ? "Saving…" : "Submit to GitHub"}</Button>
+            </>}
+            <p className="text-xs leading-relaxed text-muted-foreground">{isLocal ? "Local review. Comments and notes stay in this BB installation." : body.trim() ? "Add the comment you’re writing to the draft before submitting." : "Drafts stay in BB until you submit."}</p>
+          </div>
+        </section>}
+    </div>
+    </div>
+  </aside>;
 });
 DraftTray.displayName = "DraftTray";

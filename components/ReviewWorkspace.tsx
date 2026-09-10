@@ -15,8 +15,9 @@ import { DiffViewer, type FileViewFlags } from "./DiffViewer";
 import { DraftTray, type CommentPrefill } from "./DraftTray";
 import { RereviewBanner } from "./RereviewBanner";
 import { ThreadsPanel } from "./ThreadsPanel";
-import { AgentDock, type DockInjection } from "./AgentDock";
+import type { DockInjection } from "./AgentDock";
 import { ReviewSkeleton, ReviewError } from "./ReviewSkeleton";
+import { defaultPreferences } from "../lib/review-preferences";
 
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 560;
@@ -27,7 +28,10 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const codeTheme = experimental_useCodeTheme();
   const compact = useMediaQuery("(max-width: 767px)");
   const [mobileChapters, setMobileChapters] = useState(false);
+  const [diffLayout, setDiffLayout] = useState(defaultPreferences.diffLayout);
   const [loading, setLoading] = useState(true);
+  const [generatingReplacement, setGeneratingReplacement] = useState(false);
+  const hasDisplayedGuide = useRef(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   const request = useRef(0);
@@ -40,6 +44,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const [checks, setChecks] = useState<{ bucket: string; checks: any[] } | null>(null);
   const [activeId, setActiveId] = useState("");
   const [view, setView] = useState<"diff" | "threads">(persisted.view ?? "diff");
+  const [revision, setRevision] = useState("");
   const [repoAccess, setRepoAccess] = useState<{ accessible: boolean; repo: string | null; account: string | null } | null>(null);
   const [views, setViews] = useState<Map<string, FileViewFlags>>(new Map());
   const [injection, setInjection] = useState<DockInjection | undefined>();
@@ -64,6 +69,11 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
   useEffect(() => setLastReview(targetKey), [targetKey]);
+  const loadPreferences = useCallback(() => {
+    void rpc.call("getPreferences", null).then(({ preferences }) => setDiffLayout(preferences.diffLayout)).catch(() => {});
+  }, [rpc]);
+  useEffect(loadPreferences, [loadPreferences]);
+  useRealtime("preferences", loadPreferences);
   useEffect(() => patchReviewState(targetKey, { activeId, view, sidebarWidth, focus }), [targetKey, activeId, view, sidebarWidth, focus]);
 
   const loadViews = useCallback(async () => {
@@ -79,13 +89,19 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     const id = ++request.current;
     setLoadError(null);
     try {
-      const [{ review }, { guide }, { patch }, checksRes] = await Promise.all([
-        rpc.call("getReview", { targetKey }),
-        rpc.call("getGuide", { targetKey }),
-        rpc.call("getPatch", { targetKey }),
+      const [{ review, guide, patch, revision }, checksRes] = await Promise.all([
+        rpc.call("getReviewBundle", { targetKey }),
         rpc.call("getChecks", { targetKey }).catch(() => null),
       ]);
       if (id !== request.current) return;
+      if (!guide && hasDisplayedGuide.current) {
+        setGeneratingReplacement(true);
+        if (review?.status === "error") setLoadError("Couldn’t regenerate the guide. Your previous view and unsaved edits are still here.");
+        return;
+      }
+      hasDisplayedGuide.current = !!guide;
+      setGeneratingReplacement(false);
+      setRevision(revision);
       setReview(review);
       setGuide(guide);
       setPatch(patch);
@@ -336,10 +352,11 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         rootRef.current = el;
         setRootEl(el);
       }}
-      className="flex h-full min-h-0 min-w-0 flex-col bg-background"
+      className="@container/review flex h-full min-h-0 min-w-0 flex-col bg-background"
+      style={{ backgroundColor: "rgb(from var(--background) r g b / 1)" }}
     >
       {loadError && <div role="alert" className="flex flex-wrap items-center gap-3 border-b border-border p-3 text-sm text-destructive"><span>{loadError}</span><Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button></div>}
-      <div className="border-b border-border px-3 py-1"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel("review")}><Icon name="ArrowRight" className="size-4 rotate-180" aria-hidden /> All reviews</Button></div>
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel("review")}><Icon name="ArrowRight" className="size-4 rotate-180" aria-hidden /> All reviews</Button><div className="ml-auto flex flex-wrap gap-1"><Button variant="ghost" size="sm" aria-label="Ask the review agent" onClick={() => setInjection({ context: { file: currentFile, chapterId: activeId }, nonce: Date.now() })}><Icon name="AiContentGenerator01" className="size-4" aria-hidden /> Ask assistant</Button><Button variant="ghost" size="sm" onClick={async () => { if (document.fullscreenElement) await document.exitFullscreen(); navigate.toPluginPanel("review", { subPath: `settings/${targetKey}` }); }}><Icon name="Settings" className="size-4" aria-hidden /> Settings</Button></div></div>
       {/* Header — full when reviewing normally, slim in focus mode. */}
       {focus ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
@@ -347,14 +364,16 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {review?.title ?? guide.title ?? targetKey}
           </span>
-          <RereviewBanner targetKey={targetKey} />
+          {generatingReplacement && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">Regenerating the guide. Your previous diff and unsaved edits remain visible.</p>}
+          {!review?.archivedAt && <RereviewBanner targetKey={targetKey} />}
         </div>
       ) : (
         <div className="border-b border-border">
           <div className="p-3">
             <ReviewHeader review={review} checks={checks} intent={guide.intent} />
           </div>
-          <RereviewBanner targetKey={targetKey} />
+          {generatingReplacement && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">Regenerating the guide. Your previous diff and unsaved edits remain visible.</p>}
+          {!review?.archivedAt && <RereviewBanner targetKey={targetKey} />}
         </div>
       )}
       {repoAccess && !repoAccess.accessible && (
@@ -368,7 +387,8 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           Re-review failed — showing the previous guide. Try again.
         </p>
       )}
-      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+      <div className="flex min-h-0 flex-1 flex-col @min-[1024px]/review:flex-row">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
         {(compact ? mobileChapters : !sidebarCollapsed) && (
           <>
             <aside
@@ -480,6 +500,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           <div ref={scrollBox} onScroll={onScroll} onMouseUp={onMouseUp} className="min-h-0 flex-1 overflow-y-auto p-4">
             {view === "diff" ? (
               <DiffViewer
+                diffLayout={diffLayout}
                 themeMode={codeTheme.mode}
                 patch={patch}
                 files={activeFiles}
@@ -494,7 +515,8 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           </div>
         </main>
       </div>
-      <DraftTray isLocal={review?.kind === "ref"} targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill} />
+        <DraftTray reviewRevision={revision} account={repoAccess?.account ?? undefined} agent={{ currentFile, currentChapterId: activeId, injection, container: rootEl }} review={review} onSubmitted={() => { void load(); }} onSelectFile={(file) => { const chapter = guide.sections.find((section: any) => section.diffs.some((diff: any) => diff.file === file)); if (chapter) { setView("diff"); onSelectFile(chapter.id, file); } }} isLocal={review?.kind === "ref"} targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill} />
+      </div>
 
       {/* Line-selection action bar — GitHub-style: pick lines, then act. */}
       {lineSel && (
@@ -539,13 +561,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         </button>
       )}
 
-      <AgentDock
-        targetKey={targetKey}
-        currentFile={currentFile}
-        currentChapterId={activeId}
-        injection={injection}
-        container={rootEl}
-      />
+
     </div>
   );
 });
